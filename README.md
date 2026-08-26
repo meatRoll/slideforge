@@ -43,6 +43,8 @@ slideforge/
     ├── fixtures/demo/     # 样例 PPTD 项目（封面 + 内容页）
     ├── parse_project.rs   # 解析测试
     └── validate.rs        # 校验测试
+
+docs/pptx-layout-synthesis.md   # PPTX 版式合成设计（master/layout 骨架策略）
 ```
 
 设计要点：

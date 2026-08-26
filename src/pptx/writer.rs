@@ -33,6 +33,14 @@
 //!
 //! PPTD uses px = pt (1:1), so `bounds` map directly to EMU via
 //! `x_emu = x_px * 12700` (`a:off`) and `w_emu = w_px * 12700` (`a:ext`).
+//!
+//! # Slide master / layout synthesis
+//!
+//! PPTD is a flat model (no masters / layouts); OOXML requires every slide
+//! to hang off a slideLayout → slideMaster chain. The writer synthesizes a
+//! minimal compliant skeleton and resolves all PPTD style inheritance into
+//! explicit slide attributes — the synthesized parts carry no runtime style.
+//! See `docs/pptx-layout-synthesis.md` for the full design.
 
 use std::path::Path;
 
