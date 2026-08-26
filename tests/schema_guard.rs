@@ -436,6 +436,33 @@ fn text_boxes_have_zero_insets_and_120_line_spacing() {
             ppr.attributes.contains_key("algn"),
             "paragraph pPr carries explicit alignment (kimi parity)"
         );
+        let end = p
+            .children
+            .iter()
+            .find_map(|n| match n {
+                XMLNode::Element(e) if e.name == "endParaRPr" => Some(e),
+                _ => None,
+            })
+            .expect("paragraph pins the end-mark size (kimi parity)");
+        let run_sz = p
+            .children
+            .iter()
+            .find_map(|n| match n {
+                XMLNode::Element(e) if e.name == "r" => Some(e),
+                _ => None,
+            })
+            .and_then(|r| {
+                r.children.iter().find_map(|n| match n {
+                    XMLNode::Element(e) if e.name == "rPr" => e.attributes.get("sz").cloned(),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            end.attributes.get("sz"),
+            Some(&run_sz),
+            "endParaRPr sz must equal the run sz (kimi parity)"
+        );
         let has_ln_spc = ppr
             .children
             .iter()

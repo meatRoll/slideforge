@@ -350,6 +350,9 @@ fn render_text(
     xml.leaf("a:lstStyle", &[]);
 
     // Plain text: every line becomes one paragraph (the `<p>` equivalence).
+    let sz = (style.font_size.unwrap_or(18.0) * 100.0)
+        .round()
+        .to_string();
     for line in text.content.text.split('\n') {
         xml.start("a:p", &[]);
 
@@ -390,6 +393,13 @@ fn render_text(
         xml.end("a:pPr");
 
         emit_run(xml, ctx.theme, &style, line);
+        // Kimi pins the paragraph end-mark size to the run size; without it
+        // the mark takes the theme default (44pt here) and shifts the
+        // vertically-centered text off position.
+        xml.leaf(
+            "a:endParaRPr",
+            &[("lang", "en-US"), ("sz", &sz), ("noProof", "1")],
+        );
         xml.end("a:p");
     }
 
