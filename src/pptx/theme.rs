@@ -256,6 +256,26 @@ pub fn theme_xml(theme: Option<&Theme>) -> String {
     );
     x.end("a:path");
     x.end("a:gradFill");
+    // PowerPoint always ships three background fills; add the standard
+    // corner-glow gradient as the third entry.
+    x.start("a:gradFill", &[("rotWithShape", "1")]);
+    x.start("a:gsLst", &[]);
+    emit_gs(&mut x, "0", None, "350000", Some("75000"));
+    emit_gs(&mut x, "40000", None, "350000", Some("80000"));
+    emit_gs(&mut x, "100000", None, "300000", Some("50000"));
+    x.end("a:gsLst");
+    x.start("a:path", &[("path", "circle")]);
+    x.leaf(
+        "a:fillToRect",
+        &[
+            ("l", "50000"),
+            ("t", "80000"),
+            ("r", "-80000"),
+            ("b", "50000"),
+        ],
+    );
+    x.end("a:path");
+    x.end("a:gradFill");
     x.end("a:bgFillStyleLst");
 
     x.end("a:fmtScheme");

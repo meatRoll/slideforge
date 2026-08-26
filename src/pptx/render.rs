@@ -89,25 +89,29 @@ pub fn emu(px: f64) -> i64 {
 }
 
 /// `a:xfrm` from bounds / rotation / flip.
+/// `a:xfrm` from bounds / rotation / flip. `rot` / `flipH` / `flipV` are
+/// attributes of the transform (CT_Transform2D), never child elements.
 fn xfrm(xml: &mut Xml, bounds: Bounds, rotation: Option<f64>, flip: Option<(bool, bool)>) {
     let x = emu(bounds.x).to_string();
     let y = emu(bounds.y).to_string();
     let cx = emu(bounds.width).to_string();
     let cy = emu(bounds.height).to_string();
+    let rot = rotation
+        .filter(|deg| deg.abs() > 1e-9)
+        .map(|deg| ((deg * 60000.0).round()).to_string());
+    let (flip_h, flip_v) = flip.unwrap_or((false, false));
 
-    xml.start("a:xfrm", &[]);
-    if let Some(rot) = rotation.filter(|deg| deg.abs() > 1e-9) {
-        let rot = (rot * 60000.0).round().to_string();
-        xml.leaf("a:rot", &[("val", &rot)]);
+    let mut attrs: Vec<(&str, &str)> = Vec::new();
+    if let Some(rot) = rot.as_deref() {
+        attrs.push(("rot", rot));
     }
-    if let Some((flip_h, flip_v)) = flip {
-        if flip_h {
-            xml.leaf("a:flipH", &[]);
-        }
-        if flip_v {
-            xml.leaf("a:flipV", &[]);
-        }
+    if flip_h {
+        attrs.push(("flipH", "1"));
     }
+    if flip_v {
+        attrs.push(("flipV", "1"));
+    }
+    xml.start("a:xfrm", &attrs);
     xml.leaf("a:off", &[("x", &x), ("y", &y)]);
     xml.leaf("a:ext", &[("cx", &cx), ("cy", &cy)]);
     xml.end("a:xfrm");
@@ -130,21 +134,16 @@ fn emit_fill_color(xml: &mut Xml, color: &ResolvedColor) {
 }
 
 /// `a:ln` from a border spec (style / width / color).
+/// `a:ln` from a border spec. Schema order inside `a:ln`: fill, then
+/// `a:prstDash`, then the join. `prstDash` must never be an attribute.
 fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<()> {
     let width = emu(border.width.unwrap_or(1.0)).to_string();
-    let dash: Option<String> = border.style.map(|style| {
-        let value = match style {
-            LineStyle::Solid => "solid",
-            LineStyle::Dash => "dash",
-            LineStyle::Dot => "dot",
-        };
-        value.to_owned()
+    let dash: Option<&str> = border.style.map(|style| match style {
+        LineStyle::Solid => "solid",
+        LineStyle::Dash => "dash",
+        LineStyle::Dot => "dot",
     });
-    let mut attrs: Vec<(&str, &str)> = vec![("w", &width)];
-    if let Some(dash) = dash.as_deref() {
-        attrs.push(("prstDash", dash));
-    }
-    xml.start("a:ln", &attrs);
+    xml.start("a:ln", &[("w", &width)]);
     if let Some(color) = &border.color {
         let resolved = resolve_color(theme, color)?;
         emit_fill_color(xml, &resolved);
@@ -156,6 +155,9 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
                 alpha: None,
             },
         );
+    }
+    if let Some(dash) = dash {
+        xml.leaf("a:prstDash", &[("val", dash)]);
     }
     xml.end("a:ln");
     Ok(())
@@ -314,6 +316,8 @@ fn render_text(
     xml.start("a:prstGeom", &[("prst", "rect")]);
     xml.leaf("a:avLst", &[]);
     xml.end("a:prstGeom");
+    // Text boxes must not inherit the automatic shape fill (kimi parity).
+    xml.leaf("a:noFill", &[]);
     xml.end("p:spPr");
 
     let anchor = match style
