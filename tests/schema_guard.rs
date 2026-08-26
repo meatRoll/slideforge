@@ -228,3 +228,78 @@ fn no_legacy_element_names_survive() {
         }
     }
 }
+
+#[test]
+fn theme_colors_are_six_hex_digits_without_hash() {
+    // ST_HexColorRGB: exactly six hex digits. A `#` prefix makes the whole
+    // theme part invalid — the root cause of the second WPS repair dialog.
+    let path = build_deck("hex");
+    for (part, root) in xml_parts(&path) {
+        if part != "ppt/theme/theme1.xml" {
+            continue;
+        }
+        let mut all = Vec::new();
+        walk(&root, &mut all);
+        for element in all {
+            if element.name != "a:srgbClr" {
+                continue;
+            }
+            let val = element
+                .attributes
+                .get("val")
+                .unwrap_or_else(|| panic!("{part}: a:srgbClr without val"));
+            assert!(
+                val.len() == 6 && val.chars().all(|c| c.is_ascii_hexdigit()),
+                "{part}: srgbClr val `{val}` must be exactly six hex digits, no '#'"
+            );
+        }
+    }
+}
+
+#[test]
+fn complex_script_font_is_not_empty() {
+    let path = build_deck("csfont");
+    for (part, root) in xml_parts(&path) {
+        if part != "ppt/theme/theme1.xml" {
+            continue;
+        }
+        let mut all = Vec::new();
+        walk(&root, &mut all);
+        for element in all {
+            if element.name != "a:cs" {
+                continue;
+            }
+            let typeface = element
+                .attributes
+                .get("typeface")
+                .map(String::as_str)
+                .unwrap_or("");
+            assert!(
+                !typeface.is_empty(),
+                "{part}: <a:cs typeface=\"...\"> must not be empty"
+            );
+        }
+    }
+}
+
+#[test]
+fn clr_map_overrides_use_master_mapping() {
+    // Mirrors the Kimi exporter: overrideClrMapping on a layout/slide without
+    // its own clrMap is not the canonical form.
+    let path = build_deck("clrmap");
+    for (part, root) in xml_parts(&path) {
+        let mut all = Vec::new();
+        walk(&root, &mut all);
+        for element in all {
+            if element.name != "p:clrMapOvr" {
+                continue;
+            }
+            let child = children(element);
+            assert_eq!(child.len(), 1, "{part}: clrMapOvr must have one child");
+            assert_eq!(
+                child[0].name, "a:masterClrMapping",
+                "{part}: clrMapOvr should carry a:masterClrMapping"
+            );
+        }
+    }
+}

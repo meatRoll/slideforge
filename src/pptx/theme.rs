@@ -123,14 +123,35 @@ impl Default for ColorSlots {
 }
 
 /// Build the clrScheme slots from `theme.colors` (see module docs for rules).
+/// Normalize a color to the 6-hex OOXML `srgbClr` form (no `#`, uppercase).
+/// Accepts `#RRGGBB`, `#RRGGBBAA` (alpha dropped) and bare `RRGGBB`.
+fn hex6(raw: &str) -> Option<String> {
+    let hex = raw.trim_start_matches('#');
+    let hex = match hex.len() {
+        6 => hex,
+        8 => &hex[..6],
+        _ => return None,
+    };
+    if hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(hex.to_ascii_uppercase())
+    } else {
+        None
+    }
+}
+
+/// Build the clrScheme slots from `theme.colors` (see module docs for rules).
+///
+/// Every slot is normalized to six hex digits: `ST_HexColorRGB` forbids the
+/// `#` prefix, and a single bad value marks the whole theme part invalid
+/// (a classic "repair needed" trigger).
 pub fn build_color_slots(theme: Option<&Theme>) -> ColorSlots {
     let mut slots = ColorSlots::default();
     let Some(theme) = theme else { return slots };
 
     let mut used: BTreeMap<&'static str, String> = BTreeMap::new();
     for (key, slot) in SEMANTIC_COLOR_KEYS {
-        if let Some(color) = lookup_color(theme, key) {
-            used.insert(slot, color.0.clone());
+        if let Some(color) = lookup_color(theme, key).and_then(|c| hex6(&c.0)) {
+            used.insert(slot, color);
         }
     }
 
@@ -143,13 +164,16 @@ pub fn build_color_slots(theme: Option<&Theme>) -> ColorSlots {
         {
             continue;
         }
+        let Some(normalized) = hex6(&color.0) else {
+            continue;
+        };
         while next < CLR_SLOT_ORDER.len() && used.contains_key(CLR_SLOT_ORDER[next]) {
             next += 1;
         }
         if next >= CLR_SLOT_ORDER.len() {
             break;
         }
-        used.insert(CLR_SLOT_ORDER[next], color.0.clone());
+        used.insert(CLR_SLOT_ORDER[next], normalized);
         next += 1;
     }
 
@@ -307,7 +331,7 @@ fn emit_font_scheme(x: &mut Xml, name: &str, latin: &str, ea: &str) {
     x.start(name, &[]);
     x.leaf("a:latin", &[("typeface", latin)]);
     x.leaf("a:ea", &[("typeface", ea)]);
-    x.leaf("a:cs", &[("typeface", "")]);
+    x.leaf("a:cs", &[("typeface", latin)]);
     x.end(name);
 }
 

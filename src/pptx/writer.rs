@@ -277,7 +277,7 @@ impl<'a> PptxWriter<'a> {
         x.end("p:spTree");
         x.end("p:cSld");
         x.start("p:clrMapOvr", &[]);
-        x.leaf("a:overrideClrMapping", &[]);
+        x.leaf("a:masterClrMapping", &[]);
         x.end("p:clrMapOvr");
         x.start("p:transition", &[("spd", "med")]);
         x.leaf("p:fade", &[]);
@@ -446,7 +446,7 @@ fn slide_layout_xml() -> String {
     x.end("p:spTree");
     x.end("p:cSld");
     x.start("p:clrMapOvr", &[]);
-    x.leaf("a:overrideClrMapping", &[]);
+    x.leaf("a:masterClrMapping", &[]);
     x.end("p:clrMapOvr");
     x.end("p:sldLayout");
     x.into_string()
