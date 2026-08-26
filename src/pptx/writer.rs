@@ -3,20 +3,23 @@
 //!
 //! # Implemented / not yet implemented
 //!
-//! Implemented (this milestone):
+//! Implemented:
 //! - OPC shell: `[Content_Types].xml`, root/presentation/slide `.rels`,
 //!   `docProps/core.xml`, `ppt/presentation.xml`;
-//! - synthesized minimal slide master + blank/title layouts (structural
-//!   compliance only, see `docs/pptx-layout-synthesis.md`);
+//! - synthesized minimal slide master + blank layout (structural compliance
+//!   only, see `docs/pptx-layout-synthesis.md`);
 //! - `theme1.xml` from `Presentation.theme` (clrScheme slot mapping is a
 //!   draft; see `src/pptx/theme.rs`);
-//! - slides for `text`, `shape`, `line` elements, page backgrounds and a
-//!   default fade transition.
+//! - slides for `text`, `shape`, `line`, `icon` (Font Awesome glyphs as
+//!   custom geometry, `pptd:icon` round-trip extension) and `image`
+//!   elements, page backgrounds, and a default fade transition;
+//! - media parts (`png`/`jpg`/`jpeg`) with `contain`/`cover` `a:srcRect`
+//!   cropping computed from sniffed image dimensions.
 //!
-//! Not yet: `table`, `chart`, `image`, `icon` elements (build fails with an
-//! explicit [`Error::Unsupported`]); rich text tags (`<p>`/`<span>`/...) are
-//! plain-text only; shape shadows are dropped silently; `notes` and
-//! `animations` sections are not emitted yet.
+//! Not yet: `table`, `chart` elements (build fails with an explicit
+//! [`Error::Unsupported`]); rich text tags (`<p>`/`<span>`/...) are
+//! plain-text only; `Fill::Image` backgrounds/fills, shape shadows, `notes`
+//! and `animations` are not emitted yet.
 //!
 //! # Coordinate conversion
 //!
@@ -38,7 +41,8 @@ use std::path::Path;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::pptd::validate::validate_project;
-use crate::pptd::{Page, Presentation, Project};
+use crate::pptd::{Element, Page, Presentation, Project};
+use crate::pptx::media::MediaRegistry;
 use crate::pptx::opc::{Rel, content_types_xml, ns, rel_kind, rels_xml};
 use crate::pptx::package::{ContentType, PackageEntry};
 use crate::pptx::render;
@@ -72,8 +76,8 @@ impl<'a> PptxWriter<'a> {
             return Err(Error::Validation(issue.to_string()));
         }
 
-        let mut entries = self.collect_entries()?;
-        let content_types = content_types_xml(&entries);
+        let (mut entries, media_extensions) = self.collect_entries()?;
+        let content_types = content_types_xml(&entries, &media_extensions);
         entries.insert(
             0,
             PackageEntry::opaque("[Content_Types].xml", content_types.into_bytes()),
@@ -95,13 +99,15 @@ impl<'a> PptxWriter<'a> {
     }
 
     /// Assemble every part of the package (excluding `[Content_Types].xml`,
-    /// which needs the full list and is prepended by the caller).
-    fn collect_entries(&self) -> Result<Vec<PackageEntry>> {
+    /// which needs the full list and is prepended by the caller) plus the
+    /// media extensions that need `Default` content-type entries.
+    fn collect_entries(&self) -> Result<(Vec<PackageEntry>, Vec<String>)> {
         let presentation = &self.project.presentation;
         let pages = &self.project.pages;
         let page_count = pages.len();
 
-        let mut entries: Vec<PackageEntry> = Vec::with_capacity(9 + page_count * 2);
+        let mut entries: Vec<PackageEntry> = Vec::with_capacity(12 + page_count * 2);
+        let mut media = MediaRegistry::new(&self.project.root_dir);
 
         // docProps
         entries.push(core_properties_xml(presentation));
@@ -147,19 +153,54 @@ impl<'a> PptxWriter<'a> {
         // slides
         for (i, page) in pages.iter().enumerate() {
             let index = i + 1;
+
+            // Register this slide's media up front so rendering can resolve
+            // relationship ids and image dimensions.
+            let used = collect_media(page);
+            let mut ctx = render::RenderCtx::new(presentation.theme.as_ref());
+            ctx.media = used.clone();
+            for src in &used {
+                let part_index = media.index_of(src)?;
+                ctx.image_sizes
+                    .push((src.clone(), media.part(part_index).size));
+            }
+
             entries.push(PackageEntry::typed(
                 format!("ppt/slides/slide{index}.xml"),
                 ContentType::Slide,
-                self.slide_xml(index, page)?,
+                self.slide_xml(index, page, &mut ctx)?,
             ));
+
+            // Slide relationships: rId1 = layout, then media in usage order.
+            let mut rels = vec![Rel::new(
+                "rId1",
+                rel_kind::SLIDE_LAYOUT,
+                "../../slideLayouts/slideLayout1.xml",
+            )];
+            for (pos, src) in used.iter().enumerate() {
+                let part_index = media.index_of(src)?;
+                let part = media.part(part_index);
+                rels.push(Rel::new(
+                    &format!("rId{}", pos + 2),
+                    rel_kind::IMAGE,
+                    format!(
+                        "../{}",
+                        part.package_path
+                            .strip_prefix("ppt/")
+                            .unwrap_or(&part.package_path)
+                    ),
+                ));
+            }
             entries.push(PackageEntry::opaque(
                 format!("ppt/slides/_rels/slide{index}.xml.rels"),
-                rels_xml(&[Rel::new(
-                    "rId1",
-                    rel_kind::SLIDE_LAYOUT,
-                    "../../slideLayouts/slideLayout1.xml",
-                )]),
+                rels_xml(&rels),
             ));
+        }
+
+        // media parts (deduplicated by the registry) + their Default entries
+        let media_extensions = media.extensions();
+        for part in media.into_parts() {
+            entries.push(PackageEntry::opaque(part.package_path, part.data));
         }
 
         // presentation
@@ -197,12 +238,17 @@ impl<'a> PptxWriter<'a> {
             ]),
         ));
 
-        Ok(entries)
+        Ok((entries, media_extensions))
     }
 
     /// One slide per page; content is fully self-contained (background +
     /// elements), never borrowed from the synthesized master/layout.
-    fn slide_xml(&self, index: usize, page: &Page) -> Result<String> {
+    fn slide_xml(
+        &self,
+        index: usize,
+        page: &Page,
+        ctx: &mut render::RenderCtx<'_>,
+    ) -> Result<String> {
         let theme = self.project.presentation.theme.as_ref();
         let mut x = Xml::new();
         x.start(
@@ -211,6 +257,7 @@ impl<'a> PptxWriter<'a> {
                 ("xmlns:p", ns::PRESENTATIONML),
                 ("xmlns:a", ns::DRAWINGML),
                 ("xmlns:r", ns::RELATIONSHIPS),
+                ("xmlns:pptd", ns::PPTD),
             ],
         );
         x.start("p:cSld", &[]);
@@ -224,9 +271,8 @@ impl<'a> PptxWriter<'a> {
         }
         x.start("p:spTree", &[]);
         group_prolog(&mut x);
-        let mut ctx = render::RenderCtx::new(theme);
         for element in &page.elements {
-            render::render_element(&mut x, &mut ctx, element, index - 1)?;
+            render::render_element(&mut x, ctx, element, index - 1)?;
         }
         x.end("p:spTree");
         x.end("p:cSld");
@@ -404,4 +450,17 @@ fn slide_layout_xml() -> String {
     x.end("p:clrMapOvr");
     x.end("p:sldLayout");
     x.into_string()
+}
+
+/// Media sources referenced by a page (in element order, deduplicated).
+fn collect_media(page: &Page) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for element in &page.elements {
+        if let Element::Image(image) = element {
+            if !out.contains(&image.src) {
+                out.push(image.src.clone());
+            }
+        }
+    }
+    out
 }

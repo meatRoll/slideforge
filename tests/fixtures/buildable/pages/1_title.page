@@ -31,3 +31,13 @@ elements:
     points: "0,20 560,20"
     curve: sharp
     border: {style: solid, width: 2, color: "#ffffff"}
+  - elementId: sun
+    elementType: icon
+    bounds: [300, 100, 24, 24]
+    iconName: fas:bolt
+    fill: {type: solid, color: "$accent"}
+  - elementId: logo
+    elementType: image
+    bounds: [300, 140, 80, 40]
+    src: media/parts/logo.png
+    fit: {mode: contain}

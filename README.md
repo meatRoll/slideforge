@@ -63,7 +63,7 @@ docs/pptx-layout-synthesis.md   # PPTX 版式合成设计（master/layout 骨架
 cargo run -- check tests/fixtures/demo/demo.pptd
 cargo run -- dump tests/fixtures/demo/demo.pptd
 cargo run -- build tests/fixtures/buildable/buildable.pptd --output out.pptx
-# ⚠️ 目前 writer 支持 text / shape / line + 背景；table / chart / image / icon
+# ⚠️ 目前 writer 支持 text / shape / line / icon / image + 背景；table / chart
 #    以及富文本（<p>/<span>）会报明确的 not-supported 错误（见路线图）
 ```
 
@@ -79,9 +79,11 @@ cargo run -- build tests/fixtures/buildable/buildable.pptd --output out.pptx
     - [x] theme1.xml（clrScheme 槽位映射草案，见 `docs/pptx-layout-synthesis.md`）
     - [x] 合成最小 slideMaster + blank layout（结构合规，样式显式落盘）
     - [x] text / shape / line 渲染 + 页背景 + fade 过渡
-    - [ ] table / chart / image / icon 元素
+    - [x] icon 渲染（Font Awesome 字形 → custGeom，含 pptd:icon 扩展）
+    - [x] image 渲染（媒体包内嵌 + contain/cover 裁剪，见 `src/pptx/media.rs`）
+    - [ ] table / chart 元素
     - [ ] 富文本标签（`<p>`/`<span>`/`<strong>`）→ run 拆分
-    - [ ] notes / animations / shape shadow
+    - [ ] notes / animations / shape shadow / 图片填充（Fill::Image）
 - [ ] OPC 打包（`zip` crate），产出可编辑 .pptx
 - [ ] pptx → pptd 反向解析（编辑既有 PPTX 的场景）
 - [ ] 图表 → 原生 OOXML chart parts

@@ -18,6 +18,8 @@ pub mod ns {
     pub const DCTERMS: &str = "http://purl.org/dc/terms/";
     pub const DCMITYPE: &str = "http://purl.org/dc/dcmitype/";
     pub const XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
+    /// The Kimi/PPTD extension namespace (icons, element metadata).
+    pub const PPTD: &str = "https://kimi-design.msh.team/pptd/2026";
 }
 
 /// Relationship type URIs used by the writer.
@@ -34,6 +36,8 @@ pub mod rel_kind {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster";
     pub const THEME: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
+    pub const IMAGE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 }
 
 /// One relationship inside a `.rels` file.
@@ -69,9 +73,10 @@ pub fn rels_xml(rels: &[Rel]) -> String {
 }
 
 /// Render `[Content_Types].xml` from the package entries. Adopts the OPC
-/// rule: a `Default` for `xml` / `rels` extensions, and an `Override` for
-/// every typed part.
-pub fn content_types_xml(entries: &[PackageEntry]) -> String {
+/// rule: a `Default` for `xml` / `rels` extensions (plus image extensions
+/// collected from [`MediaRegistry`](super::media::MediaRegistry)), and an
+/// `Override` for every typed part.
+pub fn content_types_xml(entries: &[PackageEntry], media_defaults: &[String]) -> String {
     let mut xml = Xml::new();
     xml.start("Types", &[("xmlns", ns::CONTENT_TYPES)]);
     xml.leaf(
@@ -88,6 +93,17 @@ pub fn content_types_xml(entries: &[PackageEntry]) -> String {
         "Default",
         &[("Extension", "xml"), ("ContentType", "application/xml")],
     );
+    for extension in media_defaults {
+        let mime = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            _ => continue,
+        };
+        xml.leaf(
+            "Default",
+            &[("Extension", extension), ("ContentType", mime)],
+        );
+    }
     for entry in entries {
         if let Some(content_type) = &entry.content_type {
             xml.leaf(

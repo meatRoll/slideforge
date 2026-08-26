@@ -20,7 +20,7 @@ fn out_path(tag: &str) -> PathBuf {
     ))
 }
 
-const REQUIRED_PARTS: [&str; 10] = [
+const REQUIRED_PARTS: [&str; 11] = [
     "[Content_Types].xml",
     "_rels/.rels",
     "docProps/core.xml",
@@ -31,6 +31,7 @@ const REQUIRED_PARTS: [&str; 10] = [
     "ppt/slideLayouts/slideLayout1.xml",
     "ppt/slides/slide1.xml",
     "ppt/slides/_rels/slide1.xml.rels",
+    "ppt/media/image1.png",
 ];
 
 fn read_zip_part(path: &Path, name: &str) -> String {
@@ -66,17 +67,35 @@ fn buildable_deck_produces_a_complete_package() {
         );
     }
 
-    // Slide content sanity: text, shape, line and the default fade transition.
+    // Slide content sanity: text, shape, line, icon, image and the fade.
     let slide = read_zip_part(&path, "ppt/slides/slide1.xml");
     assert!(slide.contains("Hello SlideForge"), "slide text missing");
     assert!(slide.contains("roundRect"), "shape missing");
     assert!(slide.contains("cxnSp"), "line missing");
+    assert!(slide.contains("cubicBezTo"), "icon geometry missing");
+    assert!(slide.contains("<pptd:icon"), "icon pptd extension missing");
+    assert!(slide.contains("<p:pic>"), "image missing");
+    assert!(
+        slide.contains("r:embed=\"rId2\""),
+        "image blip embed missing"
+    );
+    assert!(
+        slide.contains("<a:srcRect"),
+        "contain fit should pad via srcRect"
+    );
     assert!(slide.contains("<p:transition"), "transition missing");
     assert!(slide.contains("<p:fade/>"), "fade transition missing");
 
     // Theme carries the resolved color slots.
     let theme = read_zip_part(&path, "ppt/theme/theme1.xml");
     assert!(theme.contains("2563EB"), "theme primary color missing");
+
+    // Media relationship: rId1 = layout, rId2 = the png image.
+    let slide_rels = read_zip_part(&path, "ppt/slides/_rels/slide1.xml.rels");
+    assert!(
+        slide_rels.contains("relationships/image"),
+        "media rel missing"
+    );
 }
 
 #[test]
@@ -87,6 +106,10 @@ fn content_types_cover_every_typed_part() {
     PptxWriter::new(&project).build(&path).unwrap();
 
     let content_types = read_zip_part(&path, "[Content_Types].xml");
+    assert!(
+        content_types.contains("Extension=\"png\"") && content_types.contains("image/png"),
+        "png Default content type missing"
+    );
     for (part, mime) in [
         (
             "/ppt/presentation.xml",

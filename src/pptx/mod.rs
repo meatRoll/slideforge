@@ -10,9 +10,12 @@
 //! * [`render`] — element → drawingml rendering inside slides;
 //! * [`writer`] — package assembly and ZIP output.
 
+pub mod fa;
+pub mod media;
 pub mod opc;
 pub mod package;
 pub mod render;
+pub mod svg_path;
 pub mod theme;
 pub mod writer;
 pub mod xml;
