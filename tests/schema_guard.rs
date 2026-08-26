@@ -474,3 +474,34 @@ fn text_boxes_have_zero_insets_and_120_line_spacing() {
         "guard must observe text boxes (saw {found_body})"
     );
 }
+
+#[test]
+fn text_nodes_have_no_formatting_whitespace() {
+    // The writer indents for readability; a newline inside `<a:t>` is
+    // significant whitespace in DrawingML and renders as an empty first
+    // line, shifting every anchor=ctr text block down ~half a line.
+    let path = build_deck("at-whitespace");
+    let mut seen = 0;
+    for (part, root) in xml_parts(&path) {
+        let mut all = Vec::new();
+        walk(&root, &mut all);
+        for el in all {
+            if el.name != "t" {
+                continue;
+            }
+            seen += 1;
+            let text = el.get_text().unwrap_or_default();
+            assert!(!text.is_empty(), "{part}: <t> must not be empty");
+            assert_eq!(
+                text.trim(),
+                text.as_ref(),
+                "{part}: <t> has surrounding whitespace: {text:?}"
+            );
+            assert!(
+                !text.contains('\n'),
+                "{part}: <t> contains a line break: {text:?}"
+            );
+        }
+    }
+    assert!(seen >= 2, "guard observed {seen} <t> nodes");
+}

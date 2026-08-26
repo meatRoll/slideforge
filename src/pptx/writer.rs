@@ -325,9 +325,11 @@ fn core_properties_xml(presentation: &Presentation) -> PackageEntry {
         x.text_elem("dc:title", title);
     }
     // Fixed timestamp: deterministic builds (no clock in the artifact).
-    x.start("dcterms:modified", &[("xsi:type", "dcterms:W3CDTF")]);
-    x.text("1970-01-01T00:00:00Z");
-    x.end("dcterms:modified");
+    x.inline_text(
+        "dcterms:modified",
+        &[("xsi:type", "dcterms:W3CDTF")],
+        "1970-01-01T00:00:00Z",
+    );
     x.end("cp:coreProperties");
     PackageEntry::typed(
         "docProps/core.xml",

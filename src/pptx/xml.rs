@@ -71,11 +71,41 @@ impl Xml {
         self.buf.push_str(&escape(text));
     }
 
-    /// `name` containing the escaped `text` as its only content.
+    /// `name` containing the escaped `text` as its only content, with no
+    /// line breaks or indentation: in DrawingML the `<a:t>` content is
+    /// significant whitespace, so a formatting newline would render as an
+    /// empty first line and shift the whole text block (visible with
+    /// `anchor="ctr"`).
     pub fn text_elem(&mut self, name: &str, text: &str) {
-        self.start(name, &[]);
-        self.text(text);
-        self.end(name);
+        self.write_indent();
+        self.buf.push('<');
+        self.buf.push_str(name);
+        self.buf.push('>');
+        self.buf.push_str(&escape(text));
+        self.buf.push_str("</");
+        self.buf.push_str(name);
+        self.buf.push_str(">\n");
+    }
+
+    /// `name` (with `attrs`) containing the escaped `text` as its only
+    /// content and no surrounding formatting whitespace (same rule as
+    /// [`Xml::text_elem`]).
+    pub fn inline_text(&mut self, name: &str, attrs: &[(&str, &str)], text: &str) {
+        self.write_indent();
+        self.buf.push('<');
+        self.buf.push_str(name);
+        for (key, value) in attrs {
+            self.buf.push(' ');
+            self.buf.push_str(key);
+            self.buf.push_str("=\"");
+            self.buf.push_str(&escape(value));
+            self.buf.push('"');
+        }
+        self.buf.push('>');
+        self.buf.push_str(&escape(text));
+        self.buf.push_str("</");
+        self.buf.push_str(name);
+        self.buf.push_str(">\n");
     }
 
     /// Emit the document and return the final string.
