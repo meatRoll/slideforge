@@ -1,14 +1,14 @@
 //! The chart element: tabular data plus typed series configurations.
 //!
 //! Series are discriminated by the `type` field. Like [`Element`], the
-//! [`ChartSeries`] enum is bridged through `serde_yaml::Value` because serde's
-//! internally-tagged representation does not support newtype variants.
+//! [`ChartSeries`] enum uses serde's internally-tagged representation, which
+//! merges the newtype payload into the same map as the tag.
 //!
 //! TODO: type the remaining eight series kinds (`bubble`, `candlestick`,
 //! `radar`, `waterfall`, `heatmap`, `treemap`, `sunburst`, `sankey`) and the
 //! axis / data-label configurations instead of keeping them as raw YAML.
 
-use serde::{Deserialize, Serialize, Serializer, de, ser};
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 
 use super::elements::ElementCommon;
@@ -86,8 +86,10 @@ pub struct ChartData {
     pub rows: Vec<Vec<YamlValue>>,
 }
 
-/// One series, discriminated by the `type` field.
-#[derive(Debug, Clone, PartialEq)]
+/// One series, discriminated by the `type` field: internally-tagged, payload
+/// merged into the same map as the tag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChartSeries {
     Bar(BarSeries),
     Line(LineSeries),
@@ -117,75 +119,6 @@ impl ChartSeries {
             ChartSeries::Scatter(s) => vec![s.encode.x.as_str(), s.encode.y.as_str()],
             ChartSeries::Pie(s) => vec![s.encode.category.as_str(), s.encode.value.as_str()],
         }
-    }
-}
-
-impl Serialize for ChartSeries {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let (type_name, value) = match self {
-            ChartSeries::Bar(s) => (
-                "bar",
-                serde_yaml::to_value(s).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            ChartSeries::Line(s) => (
-                "line",
-                serde_yaml::to_value(s).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            ChartSeries::Area(s) => (
-                "area",
-                serde_yaml::to_value(s).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            ChartSeries::Pie(s) => (
-                "pie",
-                serde_yaml::to_value(s).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            ChartSeries::Scatter(s) => (
-                "scatter",
-                serde_yaml::to_value(s).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-        };
-        let mut mapping = match value {
-            YamlValue::Mapping(mapping) => mapping,
-            _ => return Err(<S::Error as ser::Error>::custom("payload is not a mapping")),
-        };
-        mapping.insert(
-            YamlValue::String("type".to_owned()),
-            YamlValue::String(type_name.to_owned()),
-        );
-        YamlValue::Mapping(mapping).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ChartSeries {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = YamlValue::deserialize(deserializer)?;
-        let type_name = value
-            .get("type")
-            .and_then(YamlValue::as_str)
-            .ok_or_else(|| {
-                <D::Error as de::Error>::custom("series is missing the required `type` field")
-            })?;
-        let series = match type_name {
-            "bar" => serde_yaml::from_value(value).map(ChartSeries::Bar),
-            "line" => serde_yaml::from_value(value).map(ChartSeries::Line),
-            "area" => serde_yaml::from_value(value).map(ChartSeries::Area),
-            "pie" => serde_yaml::from_value(value).map(ChartSeries::Pie),
-            "scatter" => serde_yaml::from_value(value).map(ChartSeries::Scatter),
-            other => {
-                return Err(<D::Error as de::Error>::custom(format!(
-                    "unknown series type `{other}` (typed so far: bar, line, area, pie, \
-                     scatter; bubble, candlestick, radar, waterfall, heatmap, treemap, \
-                     sunburst, sankey are planned)"
-                )));
-            }
-        };
-        series.map_err(<D::Error as de::Error>::custom)
     }
 }
 

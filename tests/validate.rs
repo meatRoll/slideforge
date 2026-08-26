@@ -145,8 +145,8 @@ elements:
         .expect_err("unknown series type must fail to parse")
         .to_string();
     assert!(
-        message.contains("unknown series type `radar`"),
-        "got: {message}"
+        message.contains("unknown variant `radar`"),
+        "expected the serde unknown-variant finding, got: {message}"
     );
 }
 

@@ -1,13 +1,11 @@
 //! Page elements: the `Element` enum plus its typed variants.
 //!
-//! The `Element` enum is tagged by the `elementType` field. Because serde's
-//! internally-tagged representation does not support newtype variants, the
-//! enum is (de)serialized through a `serde_yaml::Value` bridge: the concrete
-//! struct handles the per-type fields, and the tag is merged in afterwards.
-//! This keeps the YAML shape exactly as specified.
+//! The `Element` enum is tagged by the `elementType` field. serde's
+//! internally-tagged representation merges newtype-variant payloads into the
+//! same map as the tag, so a plain `#[derive]` produces exactly the PPTD YAML
+//! shape.
 
-use serde::{Deserialize, Serialize, Serializer, de, ser};
-use serde_yaml::Value as YamlValue;
+use serde::{Deserialize, Serialize};
 
 use super::chart::Chart;
 use super::shared::{Alignment, Border, Bounds, Fill, ImageCrop, ImageFit, Shadow};
@@ -36,8 +34,10 @@ pub struct ElementCommon {
     pub flip: Option<(bool, bool)>,
 }
 
-/// Any element on a page, discriminated by `elementType`.
-#[derive(Debug, Clone, PartialEq)]
+/// Any element on a page, discriminated by the `elementType` field:
+/// internally-tagged, payload merged into the same map as the tag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "elementType", rename_all = "snake_case")]
 pub enum Element {
     Text(Text),
     Shape(Shape),
@@ -97,88 +97,6 @@ impl Element {
             Element::Table(e) => e.common.opacity,
             Element::Chart(e) => e.common.opacity,
         }
-    }
-}
-
-impl Serialize for Element {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let (type_name, value) = match self {
-            Element::Text(e) => (
-                "text",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Shape(e) => (
-                "shape",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Line(e) => (
-                "line",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Image(e) => (
-                "image",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Icon(e) => (
-                "icon",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Table(e) => (
-                "table",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-            Element::Chart(e) => (
-                "chart",
-                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
-            ),
-        };
-        let mut mapping = match value {
-            YamlValue::Mapping(mapping) => mapping,
-            _ => return Err(<S::Error as ser::Error>::custom("payload is not a mapping")),
-        };
-        mapping.insert(
-            YamlValue::String("elementType".to_owned()),
-            YamlValue::String(type_name.to_owned()),
-        );
-        YamlValue::Mapping(mapping).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Element {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = YamlValue::deserialize(deserializer)?;
-        let type_name = value
-            .get("elementType")
-            .and_then(YamlValue::as_str)
-            .ok_or_else(|| {
-                <D::Error as de::Error>::custom(
-                    "element is missing the required `elementType` field",
-                )
-            })?;
-        let element = match type_name {
-            "text" => serde_yaml::from_value(value).map(Element::Text),
-            "shape" => serde_yaml::from_value(value).map(Element::Shape),
-            "line" => serde_yaml::from_value(value).map(Element::Line),
-            "image" => serde_yaml::from_value(value).map(Element::Image),
-            "icon" => serde_yaml::from_value(value).map(Element::Icon),
-            "table" => serde_yaml::from_value(value).map(Element::Table),
-            "chart" => serde_yaml::from_value(value)
-                .map(Box::new)
-                .map(Element::Chart),
-            other => {
-                return Err(<D::Error as de::Error>::custom(format!(
-                    "unknown elementType `{other}` (expected one of: \
-                     text, shape, line, image, icon, table, chart)"
-                )));
-            }
-        };
-        element.map_err(<D::Error as de::Error>::custom)
     }
 }
 

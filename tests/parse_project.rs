@@ -68,14 +68,22 @@ fn parses_fill_variants() {
 
 #[test]
 fn round_trips_through_yaml() {
-    // The custom Element serde bridge must keep the PPTD YAML shape intact.
+    // The derived internally-tagged serde impls must keep the PPTD YAML
+    // shape intact, for every element kind (incl. the boxed chart).
     let project = pptd::load_project(Path::new(FIXTURE)).unwrap();
-    let page = &project.pages[0];
 
-    for element in &page.elements {
-        let yaml = serde_yaml::to_string(element).expect("element must serialize");
-        let back: pptd::Element = serde_yaml::from_str(&yaml).expect("element must deserialize");
-        assert_eq!(element, &back, "round-trip mismatch for element");
+    for (page_idx, page) in project.pages.iter().enumerate() {
+        for element in &page.elements {
+            let yaml = serde_yaml::to_string(element).expect("element must serialize");
+            let back: pptd::Element =
+                serde_yaml::from_str(&yaml).expect("element must deserialize");
+            assert_eq!(
+                element,
+                &back,
+                "round-trip mismatch on page {} for element",
+                page_idx + 1
+            );
+        }
     }
 }
 
