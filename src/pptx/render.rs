@@ -905,8 +905,11 @@ fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result
                 shape.common.element_id
             )));
         };
-        let w = emu(view_box.0).to_string();
-        let h = emu(view_box.1).to_string();
+        // The custGeom path space is abstract (source `a:path w/h`); the
+        // element bounds scale it to the final box. Multiplying by 12700 here
+        // would shrink every point to 1/12700 of the viewBox (a dot).
+        let w = (view_box.0.round() as i64).to_string();
+        let h = (view_box.1.round() as i64).to_string();
         xml.start("a:custGeom", &[]);
         emit_adjustments(xml, shape.adjustments.as_deref());
         xml.leaf("a:gdLst", &[]);

@@ -112,6 +112,14 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         .as_deref()
         .map(|part| read_theme_slots(&mut zip, part))
         .unwrap_or_default();
+    let fonts = theme_part
+        .as_deref()
+        .map(|part| theme_fonts(&mut zip, part))
+        .unwrap_or_default();
+    let defaults = master_target
+        .as_deref()
+        .map(|master| master_defaults(&mut zip, master, &slots))
+        .unwrap_or_default();
     let master_bg = master_target
         .as_deref()
         .map(|master| read_master_bg(&mut zip, master, &slots))
@@ -136,6 +144,8 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         let mut ctx = PageCtx {
             page_no,
             slots: &slots,
+            defaults: defaults.clone(),
+            fonts: fonts.clone(),
             used_ids: BTreeSet::new(),
             media: &mut media,
             skipped: &mut skipped,
@@ -215,6 +225,10 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
 struct PageCtx<'a> {
     page_no: usize,
     slots: &'a SlotColors,
+    /// Master `otherStyle` default run properties for un-styled runs.
+    defaults: MasterDefaults,
+    /// Theme major/minor fonts to resolve `+mj-lt` / `+mn-lt` aliases.
+    fonts: ThemeFonts,
     used_ids: BTreeSet<String>,
     media: &'a mut BTreeMap<String, String>,
     skipped: &'a mut Vec<Skipped>,
@@ -364,6 +378,86 @@ fn parse_size(pres: &XmlEl) -> Result<crate::pptd::shared::Size> {
     })
 }
 
+/// Theme major/minor font names, for resolving `+mj-lt` / `+mn-lt` aliases.
+#[derive(Debug, Clone, Default)]
+struct ThemeFonts {
+    major: Option<String>,
+    minor: Option<String>,
+}
+
+/// Resolve a theme font alias to the concrete typeface, keeping explicit
+/// names untouched. `+mn-lt`/`+mn-ea`/`+mn-cs` and the `+mj-*` set map to
+/// the theme's minor/major Latin face.
+fn resolve_typeface(tf: &str, fonts: &ThemeFonts) -> Option<String> {
+    match tf {
+        "+mn-lt" | "+mn-ea" | "+mn-cs" => fonts.minor.clone(),
+        "+mj-lt" | "+mj-ea" | "+mj-cs" => fonts.major.clone(),
+        s => (!s.is_empty()).then(|| s.to_string()),
+    }
+}
+
+fn theme_fonts(zip: &mut zip::ZipArchive<fs::File>, theme_part: &str) -> ThemeFonts {
+    let Ok(theme) = parse_part(zip, theme_part) else {
+        return ThemeFonts::default();
+    };
+    let slot = |name: &str| {
+        first_descendant(&theme, name)
+            .and_then(|f| first(f, "latin"))
+            .and_then(|l| attr(l, "typeface"))
+            .filter(|s| !s.is_empty() && !s.starts_with('+'))
+            .map(str::to_string)
+    };
+    ThemeFonts {
+        major: slot("majorFont"),
+        minor: slot("minorFont"),
+    }
+}
+
+/// Default run properties for plain (non-placeholder) text: the master's
+/// `otherStyle → lvl1pPr → defRPr`. Runs lacking an explicit attribute
+/// inherit these, and so does the paragraph mark — the rebuild must carry
+/// them explicitly to reproduce the source (a missing `sz` in the source
+/// run is *not* the renderer's 18pt default but the master's 28.35pt).
+#[derive(Debug, Clone, Default)]
+struct MasterDefaults {
+    sz: Option<f64>,
+    color: Option<Color>,
+    /// Raw typeface (may still be a `+mn-lt` alias; resolved at use).
+    latin_typeface: Option<String>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+}
+
+fn master_defaults(
+    zip: &mut zip::ZipArchive<fs::File>,
+    master_part: &str,
+    slots: &SlotColors,
+) -> MasterDefaults {
+    let empty = MasterDefaults::default();
+    let Ok(master) = parse_part(zip, master_part) else {
+        return empty;
+    };
+    let Some(other) = first_descendant(&master, "otherStyle") else {
+        return empty;
+    };
+    let Some(lvl1) = first(other, "lvl1pPr") else {
+        return empty;
+    };
+    let Some(rpr) = first(lvl1, "defRPr") else {
+        return empty;
+    };
+    MasterDefaults {
+        sz: attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok()).map(|s| s / 100.0),
+        color: color_from_fill(rpr, slots),
+        latin_typeface: first(rpr, "latin")
+            .and_then(|l| attr(l, "typeface"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        bold: attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
+        italic: attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
+    }
+}
+
 /// 12 clrScheme slots → hex strings, plus the standard `a:clrMap` aliases
 /// (`bg1→lt1`, `tx1→dk1`, `bg2→lt2`, `tx2→dk2`) so schemeClr refs like
 /// `bg1` resolve without reading the master's clrMap.
@@ -456,6 +550,15 @@ fn extract_page(
     let master_part = layout_part.as_deref().and_then(|layout| {
         first_rels_target(zip, layout, "slideMaster")
     });
+    // Defaults are per-slide: the slide's own master may carry a different
+    // otherStyle (master1 28.35pt vs master2 21.25pt) and theme.
+    if let Some(master) = master_part.as_deref() {
+        ctx.defaults = master_defaults(zip, master, ctx.slots);
+        let theme_part = first_rels_target(zip, master, "theme");
+        if let Some(theme) = theme_part.as_deref() {
+            ctx.fonts = theme_fonts(zip, theme);
+        }
+    }
     if let Some(master) = master_part.as_deref() {
         if let Ok(master_el) = parse_part(zip, master) {
             if let Some(master_csld) = first(&master_el, "cSld") {
@@ -849,6 +952,11 @@ fn border_from_el(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Border> {
     }
     let width = attr(ln, "w").and_then(|s| s.parse::<i64>().ok()).map(|v| px(v as f64));
     let color = color_from_fill(ln, slots);
+    // `<a:ln>` without any fill child draws no visible outline in Office
+    // (it inherits the shape's fill, which for these decorative WPS shapes
+    // is the background) — emitting a 1pt black border would ring every
+    // shape. Skip it unless there is an explicit color.
+    let color = color?;
     let style = first(ln, "prstDash").and_then(|d| attr(d, "val")).map(|v| match v {
         "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot" | "sysDashDot" => LineStyle::Dash,
         "dot" | "sysDot" => LineStyle::Dot,
@@ -857,7 +965,7 @@ fn border_from_el(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Border> {
     Some(Border {
         style,
         width,
-        color,
+        color: Some(color),
     })
 }
 
@@ -1072,14 +1180,20 @@ fn custom_shape(
             // A handful of WPS ornaments ship `moveTo`/`cubicBezTo` without
             // points; Office tolerates them, so we skip those segments too.
             let pt_opt = |s: &XmlEl| pt(s, &guides).ok();
+            let seg_pt = |s: &XmlEl| -> Option<(f64, f64)> {
+                // moveTo/lnTo carry <a:pt> as a *child*; the segment itself
+                // has no x/y attributes.
+                let child = first(s, "pt")?;
+                pt(child, &guides).ok()
+            };
             match seg.name.as_str() {
                 "moveTo" => {
-                    if let Some((x, y)) = pt_opt(seg) {
+                    if let Some((x, y)) = seg_pt(seg) {
                         d.push_str(&format!("M {} {}", rnd(x), rnd(y)));
                     }
                 }
                 "lnTo" => {
-                    if let Some((x, y)) = pt_opt(seg) {
+                    if let Some((x, y)) = seg_pt(seg) {
                         d.push_str(&format!("L {} {}", rnd(x), rnd(y)));
                     }
                 }
@@ -1452,7 +1566,7 @@ fn bg_fill(slide_or_master: &XmlEl, slots: &SlotColors) -> Option<Fill> {
 fn text_content(
     tx_body: &XmlEl,
     slots: &SlotColors,
-    _ctx: &mut PageCtx<'_>,
+    ctx: &mut PageCtx<'_>,
     _name: &str,
 ) -> Option<TextContent> {
     let body_pr = first(tx_body, "bodyPr");
@@ -1530,6 +1644,33 @@ fn text_content(
     let mut out_lines: Vec<RichLine> = Vec::new();
     for p in &paragraphs {
         let p_pr = first(p, "pPr");
+        // A paragraph's own `defRPr` further narrows the master defaults
+        // for its runs (WPS boxes regularly carry `sz=1400` there).
+        let para_defaults = p_pr
+            .and_then(|pp| first(pp, "defRPr"))
+            .map(|dr| {
+                let mut d = ctx.defaults.clone();
+                if let Some(sz) = attr(dr, "sz").and_then(|s| s.parse::<f64>().ok()) {
+                    d.sz = Some(sz / 100.0);
+                }
+                if let Some(c) = color_from_fill(dr, slots) {
+                    d.color = Some(c);
+                }
+                if let Some(tf) = first(dr, "latin")
+                    .and_then(|l| attr(l, "typeface"))
+                    .filter(|s| !s.is_empty())
+                {
+                    d.latin_typeface = Some(tf.to_string());
+                }
+                if let Some(b) = attr(dr, "b").and_then(|s| s.parse::<u8>().ok()) {
+                    d.bold = Some(b != 0);
+                }
+                if let Some(i) = attr(dr, "i").and_then(|s| s.parse::<u8>().ok()) {
+                    d.italic = Some(i != 0);
+                }
+                d
+            })
+            .unwrap_or_else(|| ctx.defaults.clone());
         let algn = p_pr
             .and_then(|pp| attr(pp, "algn"))
             .map(|a| match a {
@@ -1559,7 +1700,12 @@ fn text_content(
                         .and_then(|t| t.get_text())
                         .map(|c| c.to_string())
                         .unwrap_or_default();
-                    let st = RunStyle::from_rpr(first(child, "rPr"), slots);
+                    let st = RunStyle::from_rpr(
+                        first(child, "rPr"),
+                        slots,
+                        &para_defaults,
+                        &ctx.fonts,
+                    );
                     runs.push((st, t));
                 }
                 "br" => runs.push((None, "\n".into())),
@@ -1751,21 +1897,39 @@ struct RunStyle {
 }
 
 impl RunStyle {
-    fn from_rpr(rpr: Option<&XmlEl>, slots: &SlotColors) -> Option<Self> {
+    fn from_rpr(
+        rpr: Option<&XmlEl>,
+        slots: &SlotColors,
+        defaults: &MasterDefaults,
+        fonts: &ThemeFonts,
+    ) -> Option<Self> {
         let rpr = rpr?;
-        let color = color_from_fill(rpr, slots);
-        let font_size = attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok()).map(|s| s / 100.0);
-        let bold = attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
-        let italic = attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
-        let latin: Option<String> = first(rpr, "latin").and_then(|l| attr(l, "typeface")).filter(|s| !s.is_empty()).map(str::to_string);
-        let ea: Option<String> = first(rpr, "ea").and_then(|l| attr(l, "typeface")).filter(|s| !s.is_empty()).map(str::to_string);
-        let font_family = match (latin, ea) {
-            (None, None) => None,
-            (Some(l), None) => Some(FontFamily::Single(l)),
-            (None, Some(e)) => Some(FontFamily::Single(e)),
-            (Some(l), Some(e)) if l == e => Some(FontFamily::Single(l)),
-            (Some(l), Some(e)) => Some(FontFamily::Bilingual { latin: l, ea: e }),
-        };
+        // Explicit attributes win; anything missing falls back to the
+        // master's otherStyle defaults, and theme aliases are resolved to
+        // concrete typefaces. Without this, a run that merely says
+        // `<a:rPr/>` would render at the forward writer's 18pt black
+        // instead of the master's 28pt + tx1.
+        let explicit_sz = attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok());
+        let explicit_fill = color_from_fill(rpr, slots);
+        let explicit_bold = attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
+        let explicit_italic = attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
+
+        let font_size = explicit_sz.map(|s| s / 100.0).or(defaults.sz);
+        let color = explicit_fill.or_else(|| defaults.color.clone());
+        let bold = explicit_bold.or(defaults.bold);
+        let italic = explicit_italic.or(defaults.italic);
+
+        // Family: run latin → master default, each alias-resolved. The
+        // `ea`/`cs` slots are dropped: with an explicit latin the visible CJK
+        // face is the designer's choice; when only aliases exist the theme
+        // face governs.
+        let latin: Option<String> = first(rpr, "latin")
+            .and_then(|l| attr(l, "typeface"))
+            .filter(|s| !s.is_empty())
+            .or(defaults.latin_typeface.as_deref())
+            .and_then(|tf| resolve_typeface(tf, fonts));
+        let font_family = latin.map(FontFamily::Single);
+
         Some(RunStyle {
             color,
             font_size,
@@ -1827,4 +1991,74 @@ fn first_descendant<'a>(el: &'a XmlEl, name: &str) -> Option<&'a XmlEl> {
 
 fn attr<'a>(el: &'a XmlEl, name: &str) -> Option<&'a str> {
     el.attributes.get(name).map(String::as_str)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(xml: &str) -> XmlEl {
+        XmlEl::parse(xml.as_bytes()).expect("valid test XML")
+    }
+
+    fn fonts() -> ThemeFonts {
+        ThemeFonts {
+            major: Some("Calibri Light".into()),
+            minor: Some("Calibri".into()),
+        }
+    }
+
+    fn defaults() -> MasterDefaults {
+        // Mirrors the master otherStyle lvl1 defRPr (sz=2835, tx1, +mn-lt).
+        MasterDefaults {
+            sz: Some(2835.0 / 100.0),
+            color: Some(Color("#000000".into())),
+            latin_typeface: Some("+mn-lt".into()),
+            bold: None,
+            italic: None,
+        }
+    }
+
+    #[test]
+    fn run_without_explicit_attrs_inherits_master_defaults() {
+        // `<a:rPr/>` — no sz, no fill, no latin: the effective style must be
+        // the master's 28.35pt black Calibri, not the renderer's 18pt black.
+        let rpr = parse(r#"<rPr lang="en-US"/>"#);
+        let st = RunStyle::from_rpr(Some(&rpr), &SlotColors::new(), &defaults(), &fonts())
+            .expect("rPr must yield a style");
+        assert_eq!(st.font_size, Some(28.35));
+        assert_eq!(st.color.as_ref().map(|c| c.0.as_str()), Some("#000000"));
+        assert_eq!(
+            st.font_family,
+            Some(FontFamily::Single("Calibri".to_string())),
+            "+mn-lt alias must resolve to the theme minor font"
+        );
+    }
+
+    #[test]
+    fn explicit_attrs_win_over_defaults() {
+        let rpr = parse(r#"<rPr sz="4000" b="1"><solidFill><srgbClr val="0D37D4"/></solidFill><latin typeface="微软雅黑"/></rPr>"#);
+        let st = RunStyle::from_rpr(Some(&rpr), &SlotColors::new(), &defaults(), &fonts())
+            .expect("rPr must yield a style");
+        assert_eq!(st.font_size, Some(40.0));
+        assert!(st.bold == Some(true));
+        assert_eq!(st.color.as_ref().map(|c| c.0.as_str()), Some("#0D37D4"));
+        assert_eq!(
+            st.font_family,
+            Some(FontFamily::Single("微软雅黑".to_string()))
+        );
+        // The missing italic falls back to the (empty) default.
+        assert_eq!(st.italic, None);
+    }
+
+    #[test]
+    fn master_default_color_needs_theme_slots() {
+        // schemeClr tx1 in the defRPr resolves through the slate of aliases.
+        let rpr = parse(r#"<rPr><solidFill><schemeClr val="tx1"/></solidFill></rPr>"#);
+        let mut slots = SlotColors::new();
+        slots.insert("dk1".into(), "000000".into());
+        slots.insert("tx1".into(), "000000".into());
+        let st = RunStyle::from_rpr(Some(&rpr), &slots, &MasterDefaults::default(), &fonts())
+            .expect("rPr must yield a style");
+        assert_eq!(st.color.as_ref().map(|c| c.0.as_str()), Some("#000000"));
+    }
 }
