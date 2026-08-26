@@ -11,7 +11,6 @@ const BUILDABLE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/buildable/buildable.pptd"
 );
-const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/demo/demo.pptd");
 
 fn out_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -135,20 +134,48 @@ fn content_types_cover_every_typed_part() {
 }
 
 #[test]
-fn builds_fail_with_a_clear_error_on_unsupported_elements() {
-    // The demo deck's first slide uses rich text (`<p><span ...>`), which
-    // the writer flags first; the error must name element + page.
-    let project = pptd::load_project(Path::new(DEMO)).unwrap();
-    let path = out_path("rich-text");
-    let _ = fs::remove_file(&path);
+fn rich_text_renders_instead_of_failing() {
+    // PPTD rich text (`<p>`/`<span style>`/`<strong>`) is a supported feature
+    // now: the subtitle must render as styled runs, not fail.
+    let work = std::env::temp_dir().join("slideforge-rich-text");
+    let _ = fs::create_dir_all(work.join("pages"));
+    fs::write(
+        work.join("deck.pptd"),
+        "version: v2\nsize: [960, 540]\npages:\n  - pages/p.page\n",
+    )
+    .unwrap();
+    fs::write(
+        work.join("pages/p.page"),
+        r#"elements:
+  - elementId: subtitle
+    elementType: text
+    bounds: [40, 40, 800, 60]
+    content:
+      text: <p><span style="color:#ffffff;">FY2024 · built with SlideForge</span> and <strong>bold</strong></p>
+"#,
+    )
+    .unwrap();
 
-    let message = PptxWriter::new(&project)
-        .build(&path)
-        .expect_err("rich text must fail the build")
-        .to_string();
-    assert!(message.contains("rich text"), "got: {message}");
-    assert!(message.contains("`subtitle`"), "should name the element");
-    assert!(message.contains("page 1"), "should name the page");
+    let project = pptd::load_project(&work.join("deck.pptd")).unwrap();
+    let path = work.join("out.pptx");
+    let _ = fs::remove_file(&path);
+    PptxWriter::new(&project).build(&path).unwrap();
+
+    // The styled span must produce a white run and a bold run, with no raw
+    // markup leaking into the slide XML.
+    let mut zip = zip::ZipArchive::new(fs::File::open(&path).unwrap()).unwrap();
+    let mut slide = zip.by_name("ppt/slides/slide1.xml").unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut slide, &mut xml).unwrap();
+    assert!(!xml.contains("<p>"), "raw markup leaked into the slide");
+    assert!(
+        xml.contains("FY2024") && xml.contains("built with SlideForge") && xml.contains("bold"),
+        "subtitle text missing or mangled"
+    );
+    assert!(
+        xml.matches("<a:rPr").count() >= 2 && xml.contains("val=\"FFFFFF\""),
+        "styled run fill missing"
+    );
 }
 
 #[test]

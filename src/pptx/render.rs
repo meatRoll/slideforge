@@ -10,7 +10,8 @@ use crate::pptd::shared::{
     ImageFitMode, LineStyle, VerticalAlign,
 };
 use crate::pptd::{
-    Element, Icon, Image, Line, LineCurve, Shape, Text, TextContent, TextDirection, Theme,
+    Element, Icon, Image, Line, LineCurve, Shape, Text, TextAutofit, TextContent, TextDirection,
+    Theme,
 };
 use crate::{Error, Result};
 
@@ -247,6 +248,11 @@ pub struct EffTextStyle {
     pub align: Option<Alignment>,
     pub wrap: Option<bool>,
     pub direction: Option<TextDirection>,
+    pub margin_top: Option<f64>,
+    pub margin_left: Option<f64>,
+    pub margin_right: Option<f64>,
+    pub margin_bottom: Option<f64>,
+    pub autofit: Option<TextAutofit>,
 }
 
 pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> EffTextStyle {
@@ -275,6 +281,11 @@ pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> Eff
         align: content.align,
         wrap: content.wrap,
         direction: content.text_direction,
+        margin_top: content.margin_top.or_else(|| base.and_then(|b| b.margin_top)),
+        margin_left: content.margin_left,
+        margin_right: content.margin_right,
+        margin_bottom: content.margin_bottom,
+        autofit: content.autofit,
     }
 }
 
@@ -282,21 +293,11 @@ fn render_text(
     xml: &mut Xml,
     ctx: &mut RenderCtx<'_>,
     text: &Text,
-    page_index: usize,
+    _page_index: usize,
 ) -> Result<()> {
     let id = ctx.next_id().to_string();
     let name = text.common.element_id.clone();
     let style = effective_text_style(ctx.theme, &text.content);
-
-    // Rich text (`<p>`/`<span>`/`<strong>` ...) parsing is a later milestone;
-    // flag it explicitly instead of emitting raw markup as literal text.
-    if text.content.text.contains('<') {
-        return Err(Error::Unsupported(format!(
-            "rich text on element `{}` on page {} is not supported yet              (plain text only)",
-            text.common.element_id,
-            page_index + 1
-        )));
-    }
 
     xml.start("p:sp", &[]);
     xml.start("p:nvSpPr", &[]);
@@ -329,24 +330,41 @@ fn render_text(
         VerticalAlign::Middle => "ctr",
         VerticalAlign::Bottom => "b",
     };
+
+    // Rich text (`<p>`/`<span>`/`<strong>` …): parse paragraph + run styles.
+    if text.content.text.contains('<') {
+        xml.start("p:txBody", &[]);
+        render_rich_body(xml, ctx.theme, &style, &text.content.text, anchor)?;
+        xml.end("p:txBody");
+        xml.end("p:sp");
+        return Ok(());
+    }
+
     xml.start("p:txBody", &[]);
     let wrap = if style.wrap == Some(false) {
         "none"
     } else {
         "square"
     };
-    xml.leaf(
+    let ins = |v: Option<f64>| -> String { emu(v.unwrap_or(0.0)).to_string() };
+    xml.start(
         "a:bodyPr",
         &[
-            ("lIns", "0"),
-            ("rIns", "0"),
-            ("tIns", "0"),
-            ("bIns", "0"),
+            ("lIns", &ins(style.margin_left)),
+            ("rIns", &ins(style.margin_right)),
+            ("tIns", &ins(style.margin_top)),
+            ("bIns", &ins(style.margin_bottom)),
             ("wrap", wrap),
             ("rtlCol", "0"),
             ("anchor", anchor),
         ],
     );
+    match style.autofit {
+        Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
+        Some(TextAutofit::FitText) => xml.leaf("a:normAutofit", &[]),
+        None => {}
+    }
+    xml.end("a:bodyPr");
     xml.leaf("a:lstStyle", &[]);
 
     // Plain text: every line becomes one paragraph (the `<p>` equivalence).
@@ -408,20 +426,421 @@ fn render_text(
     Ok(())
 }
 
+/// CSS declaration list → key/value pairs (`font-size:24px; color:#f00`).
+fn css_pairs(style: &str) -> Vec<(String, String)> {
+    style
+        .split(';')
+        .filter_map(|kv| {
+            let mut it = kv.split(':');
+            let key = it.next()?.trim();
+            let value = it.next()?.trim();
+            if key.is_empty() || value.is_empty() {
+                None
+            } else {
+                Some((key.to_ascii_lowercase(), value.to_string()))
+            }
+        })
+        .collect()
+}
+
+fn css_value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+/// `24px` → 24.0; bare numbers stay numbers.
+fn css_px(value: &str) -> Option<f64> {
+    value
+        .strip_suffix("px")
+        .unwrap_or(value)
+        .trim()
+        .parse::<f64>()
+        .ok()
+}
+
+fn css_align(value: &str) -> Option<&'static str> {
+    match value {
+        "left" => Some("l"),
+        "center" => Some("ctr"),
+        "right" => Some("r"),
+        "justify" => Some("just"),
+        "distributed" => Some("dist"),
+        _ => None,
+    }
+}
+
+/// Decode the five XML entities used by rich text.
+fn unescape_xml(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+/// Parse PPTD rich text into paragraphs with per-paragraph and per-run
+/// style. Plain text (no tags) yields one paragraph per line.
+fn parse_rich(text: &str) -> Vec<RichPara> {
+    fn plain_para(line: &str) -> RichPara {
+        RichPara {
+            align: None,
+            line_height: None,
+            line_height_px: None,
+            margin_top_px: None,
+            runs: vec![RichRun {
+                text: unescape_xml(line),
+                size: None,
+                color: None,
+                family: None,
+                bold: None,
+                italic: None,
+                styled: false,
+            }],
+        }
+    }
+
+    let mut paras: Vec<RichPara> = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let remaining = &text[pos..];
+        let Some(p_start) = remaining.find("<p") else {
+            // Remaining plain text: line-based paragraphs.
+            for line in remaining.split('\n') {
+                if !line.trim().is_empty() {
+                    paras.push(plain_para(line));
+                }
+            }
+            break;
+        };
+        let head = &text[pos..pos + p_start];
+        for line in head.split('\n') {
+            if !line.trim().is_empty() {
+                paras.push(plain_para(line));
+            }
+        }
+        let tag_start = pos + p_start + 2;
+        let gt_rel = remaining[p_start + 2..]
+            .find('>')
+            .unwrap_or(remaining[p_start + 2..].len());
+        let gt = tag_start + gt_rel;
+        // `<p style="...">` — tolerate the space after the tag name.
+        let style_attr = text[tag_start..gt].trim();
+        let style = style_attr
+            .strip_prefix("style=\"")
+            .and_then(|s| s.strip_suffix('\"'))
+            .unwrap_or("");
+        let pairs = css_pairs(style);
+        let align = css_value(&pairs, "text-align").and_then(css_align);
+        let line_height = css_value(&pairs, "line-height").and_then(|v| {
+            if v.contains("px") {
+                None
+            } else {
+                v.parse::<f64>().ok()
+            }
+        });
+        let line_height_px = css_value(&pairs, "line-height").and_then(css_px).filter(|_| css_value(&pairs, "line-height").is_some_and(|v| v.contains("px")));
+        let margin_top_px = css_value(&pairs, "margin-top").and_then(css_px);
+        let close_rel = text[gt + 1..]
+            .find("</p>")
+            .unwrap_or(text[gt + 1..].len());
+        let close = gt + 1 + close_rel;
+        paras.push(RichPara {
+            align,
+            line_height,
+            line_height_px,
+            margin_top_px,
+            runs: parse_runs(&text[gt + 1..close]),
+        });
+        let after = close + 4;
+        if after > text.len() {
+            break;
+        }
+        pos = after;
+        if pos >= text.len() {
+            break;
+        }
+    }
+    paras
+}
+
+/// Split one `<p>` body into styled runs (`<span style>` / `<strong>` /
+/// `<em>`); plain text chunks become unstyled runs.
+fn parse_runs(inner: &str) -> Vec<RichRun> {
+    #[derive(Default, Clone)]
+    struct Flags {
+        size: Option<f64>,
+        color: Option<String>,
+        family: Option<String>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        styled: bool,
+    }
+
+    fn flush(out: &mut Vec<RichRun>, buf: &mut String, f: &Flags) {
+        if buf.is_empty() {
+            return;
+        }
+        out.push(RichRun {
+            text: unescape_xml(&std::mem::take(buf)),
+            size: f.size,
+            color: f.color.clone(),
+            family: f.family.clone(),
+            bold: f.bold,
+            italic: f.italic,
+            styled: f.styled,
+        });
+    }
+
+    let mut out: Vec<RichRun> = Vec::new();
+    let mut buf = String::new();
+    let mut flags = Flags::default();
+    let mut rest = inner;
+    loop {
+        let Some(lt) = rest.find('<') else {
+            buf.push_str(rest);
+            break;
+        };
+        buf.push_str(&rest[..lt]);
+        let tag = &rest[lt..];
+        if let Some(end) = tag.find('>') {
+            let name = tag[1..end].trim();
+            if let Some(style) = name.strip_prefix("span style=\"")
+                .and_then(|s| s.strip_suffix('\"'))
+            {
+                flush(&mut out, &mut buf, &flags);
+                let pairs = css_pairs(style);
+                flags.size = css_value(&pairs, "font-size").and_then(css_px);
+                flags.color = css_value(&pairs, "color").map(str::to_string);
+                flags.family = css_value(&pairs, "font-family").map(str::to_string);
+                flags.bold = css_value(&pairs, "font-weight").map(|w| {
+                    matches!(w, "bold" | "bolder" | "600" | "700" | "800" | "900")
+                });
+                flags.italic = css_value(&pairs, "font-style").map(|s| s != "normal");
+                flags.styled = flags.size.is_some()
+                    || flags.color.is_some()
+                    || flags.family.is_some()
+                    || flags.bold.is_some()
+                    || flags.italic.is_some();
+            } else if name == "/span" {
+                flush(&mut out, &mut buf, &flags);
+                flags = Flags::default();
+            } else if name == "strong" {
+                flush(&mut out, &mut buf, &flags);
+                flags.bold = Some(true);
+                flags.styled = true;
+            } else if name == "/strong" {
+                flush(&mut out, &mut buf, &flags);
+                flags.bold = None;
+            } else if name == "em" {
+                flush(&mut out, &mut buf, &flags);
+                flags.italic = Some(true);
+                flags.styled = true;
+            } else if name == "/em" {
+                flush(&mut out, &mut buf, &flags);
+                flags.italic = None;
+            } else if name == "span" {
+                flush(&mut out, &mut buf, &flags);
+                flags = Flags::default();
+            } else if name == "br/" || name == "br" {
+                buf.push('\n');
+            } else {
+                // Unknown tag: keep it as literal text (rare).
+                buf.push_str(&rest[lt..end + 1]);
+            }
+            rest = &rest[lt + end + 1..];
+        } else {
+            buf.push_str(&rest[lt..]);
+            break;
+        }
+    }
+    flush(&mut out, &mut buf, &flags);
+
+    // Merge adjacent runs with identical style (span noise reduction).
+    let mut merged: Vec<RichRun> = Vec::new();
+    for run in out {
+        if let Some(last) = merged.last_mut() {
+            let same = last.size == run.size
+                && last.color == run.color
+                && last.family == run.family
+                && last.bold == run.bold
+                && last.italic == run.italic;
+            if same && !run.styled {
+                last.text.push_str(&run.text);
+                continue;
+            }
+        }
+        merged.push(run);
+    }
+    merged
+}
+
+/// Render a rich-text body (inside an open `p:txBody`): per-paragraph `pPr`
+/// + styled runs.
+fn render_rich_body(
+    xml: &mut Xml,
+    theme: Option<&Theme>,
+    style: &EffTextStyle,
+    text: &str,
+    anchor: &str,
+) -> Result<()> {
+    // Box-level defaults (shared with the plain-text path).
+    let wrap = if style.wrap == Some(false) {
+        "none"
+    } else {
+        "square"
+    };
+    let ins = |v: Option<f64>| -> String { emu(v.unwrap_or(0.0)).to_string() };
+    xml.start(
+        "a:bodyPr",
+        &[
+            ("lIns", &ins(style.margin_left)),
+            ("rIns", &ins(style.margin_right)),
+            ("tIns", &ins(style.margin_top)),
+            ("bIns", &ins(style.margin_bottom)),
+            ("wrap", wrap),
+            ("rtlCol", "0"),
+            ("anchor", anchor),
+        ],
+    );
+    match style.autofit {
+        Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
+        Some(TextAutofit::FitText) => xml.leaf("a:normAutofit", &[]),
+        None => {}
+    }
+    xml.end("a:bodyPr");
+    xml.leaf("a:lstStyle", &[]);
+
+    for para in parse_rich(text) {
+        xml.start("a:p", &[]);
+        let algn = para
+            .align
+            .or_else(|| {
+                style
+                    .align
+                    .map(|a| a.horizontal)
+                    .and_then(|h| css_align(match h {
+                        HorizontalAlign::Left => "left",
+                        HorizontalAlign::Center => "center",
+                        HorizontalAlign::Right => "right",
+                        HorizontalAlign::Justify => "justify",
+                        HorizontalAlign::Distributed => "distributed",
+                    }))
+            })
+            .unwrap_or("l");
+        let line_height_pct = para
+            .line_height
+            .or(style.line_height)
+            .map(|multiple| ((multiple * 100000.0).round() as u64).to_string());
+        let line_height_pts = para
+            .line_height_px
+            .or(style.line_height_px)
+            .map(|px| ((px * 100.0).round() as u64).to_string());
+
+        xml.start("a:pPr", &[("algn", algn)]);
+        // Empty (spacer) paragraphs carry no line spacing — matching Office,
+        // whose empty `<a:p>` renders a much shorter blank line than an
+        // explicit lnSpc at the box font would.
+        if !para.runs.is_empty() {
+            if let Some(pct) = line_height_pct {
+                xml.start("a:lnSpc", &[]);
+                xml.leaf("a:spcPct", &[("val", &pct)]);
+                xml.end("a:lnSpc");
+            } else if let Some(pts) = line_height_pts {
+                xml.start("a:lnSpc", &[]);
+                xml.leaf("a:spcPts", &[("val", &pts)]);
+                xml.end("a:lnSpc");
+            } else {
+                xml.start("a:lnSpc", &[]);
+                xml.leaf("a:spcPct", &[("val", "120000")]);
+                xml.end("a:lnSpc");
+            }
+        }
+        if let Some(mt) = para.margin_top_px {
+            let pts = ((mt * 100.0).round() as u64).to_string();
+            xml.start("a:spcBef", &[]);
+            xml.leaf("a:spcPts", &[("val", &pts)]);
+            xml.end("a:spcBef");
+        }
+        xml.end("a:pPr");
+
+        for run in &para.runs {
+            emit_run_styled(xml, theme, style, Some(run), &run.text);
+        }
+        // A paragraph with no runs is an empty spacer line; emitting an
+        // endParaRPr would also pin its paragraph-mark size, changing the
+        // spacer height versus the source (which has no endParaRPr either).
+        if !para.runs.is_empty() {
+            let sz = para
+                .runs
+                .iter()
+                .find(|r| r.size.is_some())
+                .and_then(|r| r.size)
+                .or(style.font_size)
+                .unwrap_or(18.0);
+            let sz = ((sz * 100.0).round() as u64).to_string();
+            xml.leaf("a:endParaRPr", &[("lang", "en-US"), ("sz", &sz), ("noProof", "1")]);
+        }
+        xml.end("a:p");
+    }
+    Ok(())
+}
+
 fn emit_run(xml: &mut Xml, theme: Option<&Theme>, style: &EffTextStyle, text: &str) {
-    let font_size = style.font_size.unwrap_or(18.0);
-    let font_family = style
-        .font_family
-        .clone()
+    emit_run_styled(xml, theme, style, None, text);
+}
+
+/// Effective per-run override parsed from PPTD rich text.
+struct RichRun {
+    text: String,
+    size: Option<f64>,
+    color: Option<String>,
+    family: Option<String>,
+    /// `None` inherits the box/paragraph style; `Some` is an explicit reset.
+    bold: Option<bool>,
+    italic: Option<bool>,
+    styled: bool,
+}
+
+/// One rich-text paragraph: per-paragraph overrides + runs.
+struct RichPara {
+    align: Option<&'static str>,
+    line_height: Option<f64>,
+    line_height_px: Option<f64>,
+    margin_top_px: Option<f64>,
+    runs: Vec<RichRun>,
+}
+
+/// `emit_run` with a per-run rich-text override; unspecified run fields fall
+/// back to the box-level `EffTextStyle`.
+fn emit_run_styled(
+    xml: &mut Xml,
+    theme: Option<&Theme>,
+    style: &EffTextStyle,
+    run: Option<&RichRun>,
+    text: &str,
+) {
+    let run = run.filter(|r| r.styled);
+    let font_size = run
+        .and_then(|r| r.size)
+        .or(style.font_size)
+        .unwrap_or(18.0);
+    let font_family = run
+        .and_then(|r| r.family.as_deref())
+        .map(|f| FontFamily::Single(f.to_owned()))
+        .or_else(|| style.font_family.clone())
         .unwrap_or(FontFamily::Single("MiSans".to_owned()));
-    let color = style.color.clone().unwrap_or(Color("#000000".to_owned()));
+    let color = run
+        .and_then(|r| r.color.as_deref())
+        .map(|c| Color(c.to_owned()))
+        .or_else(|| style.color.clone())
+        .unwrap_or(Color("#000000".to_owned()));
+    let bold = run.and_then(|r| r.bold).unwrap_or(style.bold == Some(true));
+    let italic = run.and_then(|r| r.italic).unwrap_or(style.italic == Some(true));
 
     let sz = (font_size * 100.0).round().to_string();
     let mut attrs: Vec<(&str, &str)> = vec![("lang", "en-US"), ("sz", &sz), ("noProof", "1")];
-    if style.bold == Some(true) {
+    if bold {
         attrs.push(("b", "1"));
     }
-    if style.italic == Some(true) {
+    if italic {
         attrs.push(("i", "1"));
     }
 
@@ -454,12 +873,6 @@ fn emit_run(xml: &mut Xml, theme: Option<&Theme>, style: &EffTextStyle, text: &s
 fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result<()> {
     let id = ctx.next_id().to_string();
     let name = shape.common.element_id.clone();
-    if shape.shape_name == "custom" {
-        return Err(Error::Unsupported(format!(
-            "custom path geometry on element `{}` is not supported yet",
-            shape.common.element_id
-        )));
-    }
 
     xml.start("p:sp", &[]);
     xml.start("p:nvSpPr", &[]);
@@ -476,22 +889,43 @@ fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result
         shape.common.rotation,
         shape.common.flip,
     );
-    xml.start("a:prstGeom", &[("prst", &shape.shape_name)]);
-    xml.start("a:avLst", &[]);
-    if let Some(adjustments) = &shape.adjustments {
-        for (i, &adj) in adjustments.iter().take(10).enumerate() {
-            let name = if i == 0 {
-                "adj".to_owned()
-            } else {
-                format!("adj{}", i + 1)
-            };
-            let value = (adj.round() as i64).to_string();
-            let fmla = format!("val {value}");
-            xml.leaf("a:gd", &[("name", &name), ("fmla", &fmla)]);
-        }
+    if shape.shape_name == "custom" {
+        // Path geometry: viewBox (px) is the path coordinate space, the
+        // element bounds then scale it to the final box (same contract as
+        // icons and lines).
+        let Some(view_box) = shape.view_box else {
+            return Err(Error::Invalid(format!(
+                "custom shape `{}` requires viewBox",
+                shape.common.element_id
+            )));
+        };
+        let Some(path) = shape.path.as_deref() else {
+            return Err(Error::Invalid(format!(
+                "custom shape `{}` requires path",
+                shape.common.element_id
+            )));
+        };
+        let w = emu(view_box.0).to_string();
+        let h = emu(view_box.1).to_string();
+        xml.start("a:custGeom", &[]);
+        emit_adjustments(xml, shape.adjustments.as_deref());
+        xml.leaf("a:gdLst", &[]);
+        xml.leaf("a:ahLst", &[]);
+        xml.leaf("a:cxnLst", &[]);
+        xml.leaf("a:rect", &[("l", "0"), ("t", "0"), ("r", &w), ("b", &h)]);
+        xml.start("a:pathLst", &[]);
+        xml.start("a:path", &[("w", &w), ("h", &h)]);
+        svg_path::emit_path_children(xml, path)?;
+        xml.end("a:path");
+        xml.end("a:pathLst");
+        xml.end("a:custGeom");
+        // Adjustments refer to the ornament coordinates baked into the path
+        // and are already represented by the path itself.
+    } else {
+        xml.start("a:prstGeom", &[("prst", &shape.shape_name)]);
+        emit_adjustments(xml, shape.adjustments.as_deref());
+        xml.end("a:prstGeom");
     }
-    xml.end("a:avLst");
-    xml.end("a:prstGeom");
     if let Some(fill) = &shape.fill {
         fill_xml(xml, ctx.theme, fill, shape.common.opacity)?;
     }
@@ -506,6 +940,24 @@ fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result
     // text-box body would also carry a bodyPr with default insets.
     xml.end("p:sp");
     Ok(())
+}
+
+/// Preset-adjustment list `a:avLst` with up to 10 `val` guides.
+fn emit_adjustments(xml: &mut Xml, adjustments: Option<&[f64]>) {
+    xml.start("a:avLst", &[]);
+    if let Some(adjustments) = adjustments {
+        for (i, &adj) in adjustments.iter().take(10).enumerate() {
+            let name = if i == 0 {
+                "adj".to_owned()
+            } else {
+                format!("adj{}", i + 1)
+            };
+            let value = (adj.round() as i64).to_string();
+            let fmla = format!("val {value}");
+            xml.leaf("a:gd", &[("name", &name), ("fmla", &fmla)]);
+        }
+    }
+    xml.end("a:avLst");
 }
 
 // ---------------------------------------------------------------------------

@@ -16,15 +16,12 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
-# XML is emitted through the small hand-rolled builder in `pptx::xml`; if the
-# slide renderer grows rich-text run splitting, quick-xml may be worth adding.
-# zip = ... (active above)
+# XML reading for the PPTX → PPTD reverse compiler (`pptx::import`);
+# forward XML is still emitted through the hand-rolled builder in `pptx::xml`.
+xmltree = "0.11"
 
 [profile.release]
 lto = "thin"
 strip = true
 
 [dev-dependencies]
-# Structural OOXML schema guards in tests/schema_guard.rs
-xmltree = "0.11"

@@ -108,6 +108,16 @@ pub enum TextDirection {
     Vertical,
 }
 
+/// Auto-fit mode of a text box (`a:bodyPr` child).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAutofit {
+    /// `spAutoFit`: resize the shape to fit the text.
+    FitShape,
+    /// `normAutofit`: shrink the font to fit the fixed shape.
+    FitText,
+}
+
 /// Rich text content of a [`Text`] element.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,6 +147,14 @@ pub struct TextContent {
     pub letter_spacing: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub margin_top: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_left: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_right: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_bottom: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autofit: Option<TextAutofit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_direction: Option<TextDirection>,
     /// Whether the text wraps; defaults to `true`.

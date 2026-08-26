@@ -41,7 +41,8 @@ slideforge/
 │       ├── opc.rs         # 命名空间、关系类型、[Content_Types].xml / .rels
 │       ├── xml.rs         # 迷你缩进 XML 写入器
 │       ├── theme.rs       # Theme → theme1.xml 映射与颜色解析
-│       ├── render.rs      # 元素 → drawingml（文本/形状/线条）
+│       ├── render.rs      # 元素 → drawingml（文本/形状/线条，含富文本）
+│       ├── import.rs      # PPTX → PPTD 反向编译（convert）
 │       └── writer.rs      # 包组装 + ZIP 输出（PptxWriter）
 └── tests/
     ├── fixtures/demo/     # 样例 PPTD 项目（封面 + 内容页）
@@ -63,31 +64,36 @@ docs/pptx-layout-synthesis.md   # PPTX 版式合成设计（master/layout 骨架
 cargo run -- check tests/fixtures/demo/demo.pptd
 cargo run -- dump tests/fixtures/demo/demo.pptd
 cargo run -- build tests/fixtures/buildable/buildable.pptd --output out.pptx
-# ⚠️ 目前 writer 支持 text / shape / line / icon / image + 背景；table / chart
-#    以及富文本（<p>/<span>）会报明确的 not-supported 错误（见路线图）
+# 反向解析：把任何 PPTX 转回 PPTD 项目目录（含 media/ 与 pages/）
+cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./converted/deck.pptd --output roundtrip.pptx
 ```
+
+`convert` 提取 layer（母版→布局→页面自底向上烘焙）、文本框/形状/连线/图片/图标、主题色与尺寸，并把自定义几何（custGeom）的 guide 公式求值后写成 SVG path。**不支持的元素不会静默丢弃**：图表、表格等会在报告里逐项列出（页号 + 元素名 + 原因），转换照常成功。
+
+## 已实现能力（writer）
+
+- text / shape / line / icon / image + 背景、主题色、渐变填充、弹入过渡
+- `elementType: shape: custom`（SVG path + viewBox ↔ custGeom）
+- 富文本 `content.text`：`<p style="...">` / `<span style="...">` / `<strong>` / `<em>` → 逐段落/逐 run 样式；段落级 `text-align`、`line-height`（倍率或 px）、`margin-top`
+- 文本框级 `wrap` / `align` / `autofit`（FitShape/FitText）/ 四边 margin
+- table / chart 仍报明确的 not-supported 错误（见路线图）
 
 ## 路线图
 
 - [x] PPTD 类型化 AST（主题、7 类元素、动画、表格、图表核心）
 - [x] 项目解析器（主入口 + 页面、version 校验）
-- [x] 语义校验器（基础规则）
-- [ ] 补齐 13 种图表 series 的建型（bubble / candlestick / radar / waterfall / heatmap / treemap / sunburst / sankey）
-- [ ] 主题色 `$key` 引用全量解析与校验
-- [ ] OOXML writer：theme.xml / slides / drawingml（见 `src/pptx/writer.rs` 管线设计）
+- [x] 语义校验器
+- [x] OOXML writer：theme.xml / slides / drawingml（详见 `src/pptx/writer.rs`）
     - [x] OPC 骨架：Content_Types / rels / core 属性 / presentation.xml
-    - [x] theme1.xml（clrScheme 槽位映射草案，见 `docs/pptx-layout-synthesis.md`）
-    - [x] 合成最小 slideMaster + blank layout（结构合规，样式显式落盘）
-    - [x] text / shape / line 渲染 + 页背景 + fade 过渡
-    - [x] icon 渲染（Font Awesome 字形 → custGeom，含 pptd:icon 扩展）
-    - [x] image 渲染（媒体包内嵌 + contain/cover 裁剪，见 `src/pptx/media.rs`）
-    - [ ] table / chart 元素
-    - [ ] 富文本标签（`<p>`/`<span>`/`<strong>`）→ run 拆分
-    - [ ] notes / animations / shape shadow / 图片填充（Fill::Image）
-- [ ] OPC 打包（`zip` crate），产出可编辑 .pptx
-- [ ] pptx → pptd 反向解析（编辑既有 PPTX 的场景）
-- [ ] 图表 → 原生 OOXML chart parts
-- [ ] 动画 → `p:timing`、备注 → notesSlide
+    - [x] theme1.xml（clrScheme 槽位映射，见 `docs/pptx-layout-synthesis.md`）
+    - [x] 合成 slideMaster + layout（结构合规，样式显式落盘）
+    - [x] text / shape / line / icon / image 渲染 + 页背景 + fade 过渡
+    - [x] custom 几何（custGeom ↔ SVG path）
+    - [x] 富文本标签 → run 拆分（`<p>`/`<span>`/`<strong>`/`<em>`）
+    - [ ] table / chart 元素、notes / animations / shadow / Fill::Image
+- [x] OPC 打包（`zip` crate），产出可编辑 .pptx
+- [x] pptx → pptd 反向解析（`slideforge convert`，含 40 页模板往返像素级回归）
+- [ ] 图表 → 原生 OOXML chart parts 、动画 → `p:timing`、备注 → notesSlide
 
 ## 许可证
 

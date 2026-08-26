@@ -11,6 +11,7 @@
 //! * [`writer`] — package assembly and ZIP output.
 
 pub mod fa;
+pub mod import;
 pub mod media;
 pub mod opc;
 pub mod package;

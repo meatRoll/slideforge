@@ -42,6 +42,13 @@ pub enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Reverse-compile an existing `.pptx` package into a PPTD project.
+    Convert {
+        /// Input `.pptx` package.
+        file: PathBuf,
+        /// Output directory for the PPTD project (created if missing).
+        output: PathBuf,
+    },
 }
 
 impl Cli {
@@ -51,6 +58,45 @@ impl Cli {
             Command::Check { file } => run_check(&file),
             Command::Dump { file } => run_dump(&file),
             Command::Build { file, output } => run_build(&file, output.as_deref()),
+            Command::Convert { file, output } => run_convert(&file, &output),
+        }
+    }
+}
+
+fn run_convert(input: &Path, out_dir: &Path) -> i32 {
+    match pptx::import::convert_pptx_to_pptd(input, out_dir) {
+        Ok(report) => {
+            println!(
+                "converted {} → {}",
+                input.display(),
+                out_dir.join("deck.pptd").display()
+            );
+            println!(
+                "  {} page(s), {} element(s), {} media file(s)",
+                report.page_count, report.element_count, report.media_count
+            );
+            if report.skipped.is_empty() {
+                println!("  no unsupported constructs");
+            } else {
+                let mut by_reason = BTreeMap::<String, usize>::new();
+                for skip in &report.skipped {
+                    *by_reason.entry(skip.reason.clone()).or_default() += 1;
+                    eprintln!(
+                        "  skipped: page {} `{}` — {}",
+                        skip.page, skip.name, skip.reason
+                    );
+                }
+                let total: usize = report.skipped.len();
+                println!("  {total} unsupported construct(s):");
+                for (reason, count) in &by_reason {
+                    println!("    - {count}x {reason}");
+                }
+            }
+            0
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            1
         }
     }
 }
