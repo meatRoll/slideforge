@@ -21,9 +21,11 @@ elements:
   - elementId: badge
     elementType: shape
     bounds: [420, 120, 120, 60]
+    rotation: 15
     shapeName: roundRect
     adjustments: [16667]
     fill: {type: solid, color: "$accent"}
+    border: {style: dash, width: 2, color: "$primary"}
   - elementId: divider
     elementType: line
     bounds: [200, 360, 560, 40]

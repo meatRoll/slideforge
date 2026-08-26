@@ -24,3 +24,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [profile.release]
 lto = "thin"
 strip = true
+
+[dev-dependencies]
+# Structural OOXML schema guards in tests/schema_guard.rs
+xmltree = "0.11"
