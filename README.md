@@ -48,7 +48,7 @@ slideforge/
 设计要点：
 
 - **AST 与 PPTD 规范一一对应**，并保留 `Option` 语义来表达「未设置 → 沿继承链回退」。
-- 由于 serde 的内部标签枚举不支持 newtype 变体，`Element` / `ChartSeries` 通过 `serde_yaml::Value` 桥接（tag 字段单独合并），保持 YAML 形状与规范完全一致。
+- `Element` / `ChartSeries` 使用 serde 的内部标签枚举（`#[serde(tag = ...)]` + newtype 变体）：判别字段（`elementType` / `type`）与元素内容合并进同一张 map，纯 derive 即得到规范的 YAML 形状。公共字段由 `ElementCommon` 承载，经 `#[serde(flatten)]` 摊平进各元素。
 - 校验器产出 `Diagnostic` 列表而非直接报错，`check` 一次遍历列出全部问题。
 
 ## 快速开始
