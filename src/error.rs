@@ -29,9 +29,13 @@ pub enum Error {
     #[error("validation failed: {0}")]
     Validation(String),
 
-    /// Functionality that is planned but not implemented yet.
-    #[error("not implemented yet: {0}")]
-    NotImplemented(&'static str),
+    /// A parsed construct the writer does not support yet.
+    #[error("not supported yet: {0}")]
+    Unsupported(String),
+
+    /// Packaging (ZIP) or writing the output failed.
+    #[error("failed to write PPTX: {0}")]
+    Zip(String),
 }
 
 /// Convenience alias used across the crate.

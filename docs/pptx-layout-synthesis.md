@@ -1,6 +1,7 @@
 # PPTX 版式合成设计（Slide Master / Layout Synthesis）
 
-> 状态：设计文档 · 对应实现尚未开始（writer 管线见 `src/pptx/writer.rs`）
+> 状态：设计文档 · 对应实现已部分落地（OPC 骨架 + theme + text/shape/line 渲染，
+> 见 `src/pptx/writer.rs`）· 槽位映射仍为草案
 
 ## 1. 问题
 

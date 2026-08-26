@@ -15,10 +15,11 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# Planned — added together with the OOXML writer:
-# quick-xml = "0.37"                        # streaming XML writer for drawingml / presentationml
-# zip = { version = "2", default-features = false, features = ["deflate"] }  # OPC package
+# XML is emitted through the small hand-rolled builder in `pptx::xml`; if the
+# slide renderer grows rich-text run splitting, quick-xml may be worth adding.
+# zip = ... (active above)
 
 [profile.release]
 lto = "thin"

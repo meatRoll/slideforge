@@ -1,23 +1,9 @@
-//! The OPC package model: every part a `.pptx` contains.
+//! The OPC package model: content types and package entries.
 //!
-//! A minimal editable PPTX produced from PPTD needs roughly:
-//!
-//! ```text
-//! [Content_Types].xml            — content-type registry
-//! _rels/.rels                    — package-level relationships
-//! docProps/core.xml              — title, dates, ...
-//! ppt/presentation.xml           — slide list + slide size + transitions
-//! ppt/_rels/presentation.xml.rels— presentation → slides/masters/theme
-//! ppt/presProps.xml, ppt/viewProps.xml, ppt/tableStyles.xml
-//! ppt/theme/theme1.xml           — colors/fonts/effects (from PPTD theme)
-//! ppt/slideMasters/slideMaster1.xml, ppt/slideLayouts/slideLayout1.xml
-//! ppt/slides/slideN.xml          — one per page (sld > cSld > spTree)
-//! ppt/slides/_rels/slideN.xml.rels
-//! ppt/media/...                  — images/fonts
-//! ```
-//!
-//! The writer is not implemented yet; this module fixes the vocabulary
-//! (part names, content types) so the renderer can be built against it.
+//! A `.pptx` is a ZIP archive following the OPC (Open Packaging
+//! Conventions) rules, made of *parts*. Typed parts (slides, theme, ...)
+//! are listed in `[Content_Types].xml`; the `.rels` relationship files are
+//! exempt. See `docs/pptx-layout-synthesis.md` for the synthesized part set.
 
 /// A content type handled by the writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,47 +44,40 @@ impl ContentType {
     }
 }
 
-/// Canonical part paths inside the OPC package (indexes are 1-based).
+/// One file inside the OPC package.
+///
+/// `content_type == None` for parts that are exempt from `[Content_Types].xml`
+/// (the `.rels` relationship files and `[Content_Types].xml` itself).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Part {
-    ContentTypes,
-    RootRelationships,
-    CoreProperties,
-    Presentation,
-    PresentationRelationships,
-    Theme { index: usize },
-    SlideMaster { index: usize },
-    SlideLayout { index: usize },
-    Slide { index: usize },
+pub struct PackageEntry {
+    /// Part name (path) as written into the ZIP archive.
+    pub path: String,
+    pub content_type: Option<ContentType>,
+    pub data: Vec<u8>,
 }
 
-impl Part {
-    /// The part name (path) as written into the ZIP archive.
-    pub fn path(&self) -> String {
-        match self {
-            Part::ContentTypes => "[Content_Types].xml".to_owned(),
-            Part::RootRelationships => "_rels/.rels".to_owned(),
-            Part::CoreProperties => "docProps/core.xml".to_owned(),
-            Part::Presentation => "ppt/presentation.xml".to_owned(),
-            Part::PresentationRelationships => "ppt/_rels/presentation.xml.rels".to_owned(),
-            Part::Theme { index } => format!("ppt/theme/theme{index}.xml"),
-            Part::SlideMaster { index } => format!("ppt/slideMasters/slideMaster{index}.xml"),
-            Part::SlideLayout { index } => format!("ppt/slideLayouts/slideLayout{index}.xml"),
-            Part::Slide { index } => format!("ppt/slides/slide{index}.xml"),
+impl PackageEntry {
+    /// A part that is declared in `[Content_Types].xml` (slides, theme, ...).
+    /// `data` accepts either `String` (XML) or raw bytes.
+    pub fn typed(
+        path: impl Into<String>,
+        content_type: ContentType,
+        data: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            content_type: Some(content_type),
+            data: data.into(),
         }
     }
 
-    /// The content type this part declares in `[Content_Types].xml`.
-    pub fn content_type(&self) -> ContentType {
-        match self {
-            Part::ContentTypes => unreachable!("the content-types part is not typed in itself"),
-            Part::RootRelationships => unreachable!("_rels/.rels carries no content type"),
-            Part::CoreProperties => ContentType::CoreProperties,
-            Part::Presentation | Part::PresentationRelationships => ContentType::Presentation,
-            Part::Slide { .. } => ContentType::Slide,
-            Part::SlideMaster { .. } => ContentType::SlideMaster,
-            Part::SlideLayout { .. } => ContentType::SlideLayout,
-            Part::Theme { .. } => ContentType::Theme,
+    /// A part that is exempt from the content-types registry (a `.rels` file
+    /// or `[Content_Types].xml` itself).
+    pub fn opaque(path: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            path: path.into(),
+            content_type: None,
+            data: data.into(),
         }
     }
 }

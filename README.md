@@ -36,9 +36,13 @@ slideforge/
 │   │   ├── animation.rs   # Page.animations
 │   │   ├── parser.rs      # YAML → AST（主入口 + 页面加载，校验 version=v2）
 │   │   └── validate.rs    # 语义校验：id 唯一、bounds 合法、主题引用、表格/图表结构
-│   └── pptx/              # OOXML / OPC 输出管线（骨架，待实现）
-│       ├── package.rs     # OPC part 名称与 content-type 模型
-│       └── writer.rs      # PptxWriter::build（渲染管线设计文档 + API 骨架）
+│   └── pptx/              # OOXML / OPC 输出管线
+│       ├── package.rs     # content-type 与包条目模型
+│       ├── opc.rs         # 命名空间、关系类型、[Content_Types].xml / .rels
+│       ├── xml.rs         # 迷你缩进 XML 写入器
+│       ├── theme.rs       # Theme → theme1.xml 映射与颜色解析
+│       ├── render.rs      # 元素 → drawingml（文本/形状/线条）
+│       └── writer.rs      # 包组装 + ZIP 输出（PptxWriter）
 └── tests/
     ├── fixtures/demo/     # 样例 PPTD 项目（封面 + 内容页）
     ├── parse_project.rs   # 解析测试
@@ -58,7 +62,9 @@ docs/pptx-layout-synthesis.md   # PPTX 版式合成设计（master/layout 骨架
 ```bash
 cargo run -- check tests/fixtures/demo/demo.pptd
 cargo run -- dump tests/fixtures/demo/demo.pptd
-cargo run -- build tests/fixtures/demo/demo.pptd     # 目前返回 not-implemented
+cargo run -- build tests/fixtures/buildable/buildable.pptd --output out.pptx
+# ⚠️ 目前 writer 支持 text / shape / line + 背景；table / chart / image / icon
+#    以及富文本（<p>/<span>）会报明确的 not-supported 错误（见路线图）
 ```
 
 ## 路线图
@@ -69,6 +75,13 @@ cargo run -- build tests/fixtures/demo/demo.pptd     # 目前返回 not-implemen
 - [ ] 补齐 13 种图表 series 的建型（bubble / candlestick / radar / waterfall / heatmap / treemap / sunburst / sankey）
 - [ ] 主题色 `$key` 引用全量解析与校验
 - [ ] OOXML writer：theme.xml / slides / drawingml（见 `src/pptx/writer.rs` 管线设计）
+    - [x] OPC 骨架：Content_Types / rels / core 属性 / presentation.xml
+    - [x] theme1.xml（clrScheme 槽位映射草案，见 `docs/pptx-layout-synthesis.md`）
+    - [x] 合成最小 slideMaster + blank layout（结构合规，样式显式落盘）
+    - [x] text / shape / line 渲染 + 页背景 + fade 过渡
+    - [ ] table / chart / image / icon 元素
+    - [ ] 富文本标签（`<p>`/`<span>`/`<strong>`）→ run 拆分
+    - [ ] notes / animations / shape shadow
 - [ ] OPC 打包（`zip` crate），产出可编辑 .pptx
 - [ ] pptx → pptd 反向解析（编辑既有 PPTX 的场景）
 - [ ] 图表 → 原生 OOXML chart parts
