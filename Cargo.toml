@@ -1,0 +1,25 @@
+[package]
+name = "slideforge"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Edit and build PPTX presentations from the PPTD language"
+license = "MIT OR Apache-2.0"
+keywords = ["pptx", "pptd", "presentation", "ooxml", "slides"]
+categories = ["command-line-utilities", "encoding"]
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2"
+
+# Planned — added together with the OOXML writer:
+# quick-xml = "0.37"                        # streaming XML writer for drawingml / presentationml
+# zip = { version = "2", default-features = false, features = ["deflate"] }  # OPC package
+
+[profile.release]
+lto = "thin"
+strip = true

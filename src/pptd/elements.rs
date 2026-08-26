@@ -1,0 +1,428 @@
+//! Page elements: the `Element` enum plus its typed variants.
+//!
+//! The `Element` enum is tagged by the `elementType` field. Because serde's
+//! internally-tagged representation does not support newtype variants, the
+//! enum is (de)serialized through a `serde_yaml::Value` bridge: the concrete
+//! struct handles the per-type fields, and the tag is merged in afterwards.
+//! This keeps the YAML shape exactly as specified.
+
+use serde::{Deserialize, Serialize, Serializer, de, ser};
+use serde_yaml::Value as YamlValue;
+
+use super::chart::Chart;
+use super::shared::{Alignment, Border, Bounds, Fill, ImageCrop, ImageFit, Shadow};
+use super::theme::TableStyleRef;
+
+/// `ElementBase` fields: element id + bounds + optional geometry transforms.
+///
+/// Flattened into every concrete element struct (Rust 2024 does not allow
+/// `macro_rules!` to expand to struct fields, so the common surface is a
+/// struct instead).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementCommon {
+    /// Unique element id within the page.
+    pub element_id: String,
+    /// Position and size `[x, y, width, height]` in px.
+    pub bounds: Bounds,
+    /// Clockwise rotation in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
+    /// Opacity in [0, 1].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    /// `[horizontal flip, vertical flip]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip: Option<(bool, bool)>,
+}
+
+/// Any element on a page, discriminated by `elementType`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Element {
+    Text(Text),
+    Shape(Shape),
+    Line(Line),
+    Image(Image),
+    Icon(Icon),
+    Table(Table),
+    /// Charts are the largest element; boxed to keep the enum small.
+    Chart(Box<Chart>),
+}
+
+impl Element {
+    /// The `elementType` value of this element.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Element::Text(_) => "text",
+            Element::Shape(_) => "shape",
+            Element::Line(_) => "line",
+            Element::Image(_) => "image",
+            Element::Icon(_) => "icon",
+            Element::Table(_) => "table",
+            Element::Chart(_) => "chart",
+        }
+    }
+
+    pub fn element_id(&self) -> &str {
+        match self {
+            Element::Text(e) => &e.common.element_id,
+            Element::Shape(e) => &e.common.element_id,
+            Element::Line(e) => &e.common.element_id,
+            Element::Image(e) => &e.common.element_id,
+            Element::Icon(e) => &e.common.element_id,
+            Element::Table(e) => &e.common.element_id,
+            Element::Chart(e) => &e.common.element_id,
+        }
+    }
+
+    pub fn bounds(&self) -> Bounds {
+        match self {
+            Element::Text(e) => e.common.bounds,
+            Element::Shape(e) => e.common.bounds,
+            Element::Line(e) => e.common.bounds,
+            Element::Image(e) => e.common.bounds,
+            Element::Icon(e) => e.common.bounds,
+            Element::Table(e) => e.common.bounds,
+            Element::Chart(e) => e.common.bounds,
+        }
+    }
+
+    pub fn opacity(&self) -> Option<f64> {
+        match self {
+            Element::Text(e) => e.common.opacity,
+            Element::Shape(e) => e.common.opacity,
+            Element::Line(e) => e.common.opacity,
+            Element::Image(e) => e.common.opacity,
+            Element::Icon(e) => e.common.opacity,
+            Element::Table(e) => e.common.opacity,
+            Element::Chart(e) => e.common.opacity,
+        }
+    }
+}
+
+impl Serialize for Element {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let (type_name, value) = match self {
+            Element::Text(e) => (
+                "text",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Shape(e) => (
+                "shape",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Line(e) => (
+                "line",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Image(e) => (
+                "image",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Icon(e) => (
+                "icon",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Table(e) => (
+                "table",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+            Element::Chart(e) => (
+                "chart",
+                serde_yaml::to_value(e).map_err(<S::Error as ser::Error>::custom)?,
+            ),
+        };
+        let mut mapping = match value {
+            YamlValue::Mapping(mapping) => mapping,
+            _ => return Err(<S::Error as ser::Error>::custom("payload is not a mapping")),
+        };
+        mapping.insert(
+            YamlValue::String("elementType".to_owned()),
+            YamlValue::String(type_name.to_owned()),
+        );
+        YamlValue::Mapping(mapping).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Element {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = YamlValue::deserialize(deserializer)?;
+        let type_name = value
+            .get("elementType")
+            .and_then(YamlValue::as_str)
+            .ok_or_else(|| {
+                <D::Error as de::Error>::custom(
+                    "element is missing the required `elementType` field",
+                )
+            })?;
+        let element = match type_name {
+            "text" => serde_yaml::from_value(value).map(Element::Text),
+            "shape" => serde_yaml::from_value(value).map(Element::Shape),
+            "line" => serde_yaml::from_value(value).map(Element::Line),
+            "image" => serde_yaml::from_value(value).map(Element::Image),
+            "icon" => serde_yaml::from_value(value).map(Element::Icon),
+            "table" => serde_yaml::from_value(value).map(Element::Table),
+            "chart" => serde_yaml::from_value(value)
+                .map(Box::new)
+                .map(Element::Chart),
+            other => {
+                return Err(<D::Error as de::Error>::custom(format!(
+                    "unknown elementType `{other}` (expected one of: \
+                     text, shape, line, image, icon, table, chart)"
+                )));
+            }
+        };
+        element.map_err(<D::Error as de::Error>::custom)
+    }
+}
+
+/// Text direction of a text box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDirection {
+    Horizontal,
+    Vertical,
+}
+
+/// Rich text content of a [`Text`] element.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextContent {
+    /// Rich text string; may contain `<p>`, `<span>`, `<strong>`, ... tags.
+    pub text: String,
+    /// Reference to `theme.textStyles`, e.g. `"$title"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<super::shared::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<super::shared::FontFamily>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<super::shared::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height_px: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_top: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<TextDirection>,
+    /// Whether the text wraps; defaults to `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
+    /// `[horizontal, vertical]` alignment; defaults to `["left", "top"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Alignment>,
+    /// Text gradient (applied to the text itself).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<super::shared::GradientFill>,
+    /// Text shadow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// `elementType: text` — a text box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Text {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    pub content: TextContent,
+}
+
+/// `elementType: shape` — a built-in or custom geometry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shape {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    pub shape_name: String,
+    /// Geometry adjustments; reuse the OOXML parameter order and count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjustments: Option<Vec<f64>>,
+    /// View box `[w, h]`; required when `shape_name == "custom"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_box: Option<(f64, f64)>,
+    /// SVG path; required when `shape_name == "custom"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// Arrowhead style for a [`Line`] element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowType {
+    Arrow,
+    Stealth,
+    Diamond,
+    Oval,
+}
+
+/// Connection curve of a [`Line`] element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineCurve {
+    /// Sharp joins.
+    Sharp,
+    /// Rounded joins.
+    Round,
+    /// Bezier smooth curve.
+    Smooth,
+}
+
+/// `elementType: line` — a bezier or connected line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Line {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    /// Path coordinate system `[w, h]`; points live inside it.
+    pub view_box: (f64, f64),
+    /// Bezier path points, e.g. `"0,0 0.2,0 0.8,1 1,1"`.
+    pub points: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<LineCurve>,
+    /// `[start arrow, end arrow]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrow: Option<(Option<ArrowType>, Option<ArrowType>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// Shape definition reused by `Image.cropShape` and `Bar.symbol`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShapeDef {
+    /// `"custom"` selects the path-based geometry.
+    pub shape_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjustments: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_box: Option<(f64, f64)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// `elementType: image`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Image {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    /// URL or local relative path.
+    pub src: String,
+    /// Shape used to clip the image; defaults to a rectangle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_shape: Option<ShapeDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<ImageFit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ImageCrop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// `elementType: icon` — a Font Awesome 7.x icon, `iconName` is `style:name`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Icon {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    /// e.g. `"fas:lightbulb"`.
+    pub icon_name: String,
+    /// Defaults to black solid fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}
+
+/// One table cell (see the spec for merged-cell layout rules).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cell {
+    /// Rich text; defaults to an empty cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Reference to `theme.textStyles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<super::shared::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<super::shared::FontFamily>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<super::shared::Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height_px: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_top: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<super::shared::BorderSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Alignment>,
+    /// Merge range; covered cells are omitted from the `rows` array.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_span: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col_span: Option<u32>,
+}
+
+/// `elementType: table`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Table {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    /// Column-width ratios; each in `[0, 1]` and summing to `1`.
+    pub column_widths: Vec<f64>,
+    /// Row-height ratios; each in `[0, 1]` and summing to `1`.
+    pub row_heights: Vec<f64>,
+    /// Cells with merged cells omitted (see the spec).
+    pub rows: Vec<Vec<Cell>>,
+    /// `$key` reference or inline table style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<TableStyleRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+}

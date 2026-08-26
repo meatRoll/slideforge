@@ -1,0 +1,33 @@
+pageType: cover
+background:
+  type: solid
+  color: "$primary"
+elements:
+  - elementId: title
+    elementType: text
+    bounds: [100, 200, 760, 80]
+    content:
+      style: "$title"
+      align: [center, middle]
+      text: Annual Work Summary
+  - elementId: subtitle
+    elementType: text
+    bounds: [100, 290, 760, 40]
+    content:
+      style: "$body"
+      align: [center, middle]
+      text: |
+        <p><span style="color:#ffffff;">FY2024 · built with SlideForge</span></p>
+  - elementId: badge
+    elementType: shape
+    bounds: [420, 120, 120, 60]
+    shapeName: roundRect
+    adjustments: [16667]
+    fill: {type: solid, color: "$accent"}
+  - elementId: divider
+    elementType: line
+    bounds: [200, 360, 560, 40]
+    viewBox: [560, 40]
+    points: "0,20 560,20"
+    curve: sharp
+    border: {style: solid, width: 2, color: "#ffffff"}

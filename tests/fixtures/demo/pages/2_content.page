@@ -1,0 +1,38 @@
+pageType: content
+elements:
+  - elementId: heading
+    elementType: text
+    bounds: [60, 40, 840, 50]
+    content:
+      style: "$title"
+      text: Key Metrics
+  - elementId: metrics
+    elementType: table
+    bounds: [60, 120, 840, 260]
+    columnWidths: [0.4, 0.3, 0.3]
+    rowHeights: [0.2, 0.4, 0.4]
+    style: "$default"
+    rows:
+      - - text: Metric
+        - text: "2023"
+        - text: "2024"
+      - - text: Revenue
+        - text: "82.5"
+        - text: "96.3"
+      - - text: Net profit
+        - text: "12.1"
+        - text: "15.8"
+  - elementId: trend
+    elementType: chart
+    bounds: [60, 400, 840, 120]
+    data:
+      cols: [quarter, revenue]
+      rows:
+        - [Q1, 120]
+        - [Q2, 132]
+        - [Q3, 101]
+        - [Q4, 134]
+    series:
+      - type: bar
+        encode: {x: quarter, y: revenue}
+        fill: "$primary"
