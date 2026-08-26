@@ -23,6 +23,21 @@ use slideforge::pptd;
 use slideforge::pptx::writer::PptxWriter;
 use xmltree::{Element, XMLNode};
 
+/// Collapse `.`/`..` segments in a package-relative path.
+fn normalize_rel(path: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            other => out.push(other.to_owned()),
+        }
+    }
+    out.join("/")
+}
+
 const BUILDABLE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/buildable/buildable.pptd"
@@ -299,6 +314,67 @@ fn clr_map_overrides_use_master_mapping() {
             assert_eq!(
                 child[0].name, "a:masterClrMapping",
                 "{part}: clrMapOvr should carry a:masterClrMapping"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_relationship_resolves_to_an_existing_part() {
+    // OPC relationship targets are resolved against the source part's
+    // directory. A target that points nowhere (e.g. "../../slideLayouts/..."
+    // from ppt/slides/) makes the app open the package as damaged.
+    let path = build_deck("rels");
+    let file = fs::File::open(&path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_owned())
+        .collect();
+
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).unwrap();
+        let part_name = entry.name().to_owned();
+        if !part_name.ends_with(".rels") {
+            continue;
+        }
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        let root = Element::parse(data.as_slice()).unwrap();
+
+        let base_dir = if part_name == "_rels/.rels" {
+            std::path::Path::new("")
+        } else {
+            let dir = std::path::Path::new(&part_name)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap();
+            dir
+        };
+        for rel in root.children.iter().filter_map(|node| match node {
+            XMLNode::Element(e) if e.name == "Relationship" => Some(e),
+            _ => None,
+        }) {
+            if rel.attributes.get("TargetMode").map(String::as_str) == Some("External") {
+                continue;
+            }
+            let target = rel
+                .attributes
+                .get("Target")
+                .map(String::as_str)
+                .unwrap_or("");
+            let resolved = if let Some(stripped) = target.strip_prefix('/') {
+                normalize_rel(stripped)
+            } else {
+                normalize_rel(&format!("{}/{}", base_dir.display(), target))
+            };
+            assert!(
+                names
+                    .iter()
+                    .any(|n| n == &resolved || n == &format!("./{resolved}")),
+                "{part_name}: relationship {} -> `{target}` resolves to `{resolved}`, \\
+                 which is not a part of the package",
+                rel.attributes.get("Id").map(String::as_str).unwrap_or("?")
             );
         }
     }

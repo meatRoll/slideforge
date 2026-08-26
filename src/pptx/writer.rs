@@ -133,12 +133,12 @@ impl<'a> PptxWriter<'a> {
         entries.push(PackageEntry::opaque(
             "ppt/slideMasters/_rels/slideMaster1.xml.rels",
             rels_xml(&[
-                Rel::new("rId1", rel_kind::THEME, "theme/theme1.xml"),
                 Rel::new(
-                    "rId2",
+                    "rId1",
                     rel_kind::SLIDE_LAYOUT,
                     "../slideLayouts/slideLayout1.xml",
                 ),
+                Rel::new("rId2", rel_kind::THEME, "../theme/theme1.xml"),
             ]),
         ));
         entries.push(PackageEntry::opaque(
@@ -175,7 +175,7 @@ impl<'a> PptxWriter<'a> {
             let mut rels = vec![Rel::new(
                 "rId1",
                 rel_kind::SLIDE_LAYOUT,
-                "../../slideLayouts/slideLayout1.xml",
+                "../slideLayouts/slideLayout1.xml",
             )];
             for (pos, src) in used.iter().enumerate() {
                 let part_index = media.index_of(src)?;
@@ -405,7 +405,7 @@ fn slide_master_xml() -> String {
         ],
     );
     x.start("p:sldLayoutIdLst", &[]);
-    x.leaf("p:sldLayoutId", &[("id", "2147483649"), ("r:id", "rId2")]);
+    x.leaf("p:sldLayoutId", &[("id", "2147483649"), ("r:id", "rId1")]);
     x.end("p:sldLayoutIdLst");
     x.start("p:txStyles", &[]);
     emit_tx_style(&mut x, "p:titleStyle", "4400");
