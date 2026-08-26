@@ -335,7 +335,18 @@ fn render_text(
     } else {
         "square"
     };
-    xml.leaf("a:bodyPr", &[("wrap", wrap), ("anchor", anchor)]);
+    xml.leaf(
+        "a:bodyPr",
+        &[
+            ("lIns", "0"),
+            ("rIns", "0"),
+            ("tIns", "0"),
+            ("bIns", "0"),
+            ("wrap", wrap),
+            ("rtlCol", "0"),
+            ("anchor", anchor),
+        ],
+    );
     xml.leaf("a:lstStyle", &[]);
 
     // Plain text: every line becomes one paragraph (the `<p>` equivalence).
@@ -360,20 +371,23 @@ fn render_text(
             .line_height_px
             .map(|px| ((px * 100.0).round() as u64).to_string());
 
-        let emit_line_spacing = line_height_pct.is_some() || line_height_pts.is_some();
-        if algn != "l" || emit_line_spacing {
-            xml.start("a:pPr", &[("algn", algn)]);
-            if let Some(pct) = line_height_pct {
-                xml.start("a:lnSpc", &[]);
-                xml.leaf("a:spcPct", &[("val", &pct)]);
-                xml.end("a:lnSpc");
-            } else if let Some(pts) = line_height_pts {
-                xml.start("a:lnSpc", &[]);
-                xml.leaf("a:spcPts", &[("val", &pts)]);
-                xml.end("a:lnSpc");
-            }
-            xml.end("a:pPr");
+        // Kimi emits paragraph properties for every paragraph: explicit
+        // alignment plus the renderer's default 120% line spacing.
+        xml.start("a:pPr", &[("algn", algn)]);
+        if let Some(pct) = line_height_pct {
+            xml.start("a:lnSpc", &[]);
+            xml.leaf("a:spcPct", &[("val", &pct)]);
+            xml.end("a:lnSpc");
+        } else if let Some(pts) = line_height_pts {
+            xml.start("a:lnSpc", &[]);
+            xml.leaf("a:spcPts", &[("val", &pts)]);
+            xml.end("a:lnSpc");
+        } else {
+            xml.start("a:lnSpc", &[]);
+            xml.leaf("a:spcPct", &[("val", "120000")]);
+            xml.end("a:lnSpc");
         }
+        xml.end("a:pPr");
 
         emit_run(xml, ctx.theme, &style, line);
         xml.end("a:p");
@@ -393,7 +407,7 @@ fn emit_run(xml: &mut Xml, theme: Option<&Theme>, style: &EffTextStyle, text: &s
     let color = style.color.clone().unwrap_or(Color("#000000".to_owned()));
 
     let sz = (font_size * 100.0).round().to_string();
-    let mut attrs: Vec<(&str, &str)> = vec![("lang", "en-US"), ("sz", &sz)];
+    let mut attrs: Vec<(&str, &str)> = vec![("lang", "en-US"), ("sz", &sz), ("noProof", "1")];
     if style.bold == Some(true) {
         attrs.push(("b", "1"));
     }
@@ -478,13 +492,8 @@ fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result
     // currently dropped (documented in the module docs).
     xml.end("p:spPr");
 
-    xml.start("p:txBody", &[]);
-    xml.leaf("a:bodyPr", &[]);
-    xml.leaf("a:lstStyle", &[]);
-    xml.start("a:p", &[]);
-    xml.leaf("a:endParaRPr", &[("lang", "en-US")]);
-    xml.end("a:p");
-    xml.end("p:txBody");
+    // Kimi renders decorative shapes without a `p:txBody` at all; an empty
+    // text-box body would also carry a bodyPr with default insets.
     xml.end("p:sp");
     Ok(())
 }
@@ -724,16 +733,20 @@ fn src_rect(image: &Image, size: Option<ImageSize>) -> (i64, i64, i64, i64) {
                 ImageFitMode::Fill => {}
                 ImageFitMode::Contain => {
                     if ratio_img > ratio_box {
-                        // Letterbox left/right: expand the source rect.
-                        let scale = bh / ih;
-                        let alpha = (bw / (iw * scale) - 1.0) / 2.0;
-                        l = -alpha;
-                        r = -alpha;
-                    } else if ratio_img < ratio_box {
+                        // Image wider than the box: the scale is limited by
+                        // width, so the slack is vertical → letterbox
+                        // top/bottom with negative crops (kimi parity).
                         let scale = bw / iw;
-                        let alpha = (bh / (ih * scale) - 1.0) / 2.0;
-                        t = -alpha;
-                        b = -alpha;
+                        let pad = (bh - ih * scale) / bh / 2.0;
+                        t = -pad;
+                        b = -pad;
+                    } else if ratio_img < ratio_box {
+                        // Image taller than the box: scale limited by height,
+                        // slack is horizontal → letterbox left/right.
+                        let scale = bh / ih;
+                        let pad = (bw - iw * scale) / bw / 2.0;
+                        l = -pad;
+                        r = -pad;
                     }
                 }
                 ImageFitMode::Cover => {

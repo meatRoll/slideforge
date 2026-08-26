@@ -99,10 +99,10 @@ fn xfrm_transform_flags_are_attributes() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "a:xfrm" {
+            if element.name != "xfrm" {
                 continue;
             }
-            for forbidden in ["a:rot", "a:flipH", "a:flipV"] {
+            for forbidden in ["rot", "flipH", "flipV"] {
                 assert!(
                     children(element).iter().all(|c| c.name != forbidden),
                     "{part}: <{forbidden}> must be an attribute of <a:xfrm>, not a child"
@@ -119,7 +119,7 @@ fn line_dash_is_a_child_element_after_the_fill() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "a:ln" {
+            if element.name != "ln" {
                 continue;
             }
             assert!(
@@ -127,11 +127,11 @@ fn line_dash_is_a_child_element_after_the_fill() {
                 "{part}: a:prstDash must not be an attribute of <a:ln>"
             );
             let children = children(element);
-            if let Some(dash) = children.iter().position(|c| c.name == "a:prstDash") {
+            if let Some(dash) = children.iter().position(|c| c.name == "prstDash") {
                 let fill = children.iter().position(|c| {
                     matches!(
                         c.name.as_str(),
-                        "a:solidFill" | "a:noFill" | "a:gradFill" | "a:blipFill" | "a:pattFill"
+                        "solidFill" | "noFill" | "gradFill" | "blipFill" | "pattFill"
                     )
                 });
                 if let Some(fill) = fill {
@@ -152,18 +152,18 @@ fn text_boxes_explicitly_disable_fill() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "p:sp" {
+            if element.name != "sp" {
                 continue;
             }
             let sp_children = children(element);
             let is_text_box = sp_children
                 .iter()
-                .find(|c| c.name == "p:nvSpPr")
+                .find(|c| c.name == "nvSpPr")
                 .map(|nv| {
                     let nv_children = children(nv);
                     nv_children
                         .iter()
-                        .find(|c| c.name == "p:cNvSpPr")
+                        .find(|c| c.name == "cNvSpPr")
                         .and_then(|c| c.attributes.get("txBox"))
                         .is_some_and(|v| v == "1")
                 })
@@ -173,10 +173,10 @@ fn text_boxes_explicitly_disable_fill() {
             }
             let sp_pr = sp_children
                 .iter()
-                .find(|c| c.name == "p:spPr")
+                .find(|c| c.name == "spPr")
                 .unwrap_or_else(|| panic!("{part}: text box p:sp without p:spPr"));
             assert!(
-                children(sp_pr).iter().any(|c| c.name == "a:noFill"),
+                children(sp_pr).iter().any(|c| c.name == "noFill"),
                 "{part}: text box must carry <a:noFill> (automatic fill would paint the box)"
             );
         }
@@ -193,7 +193,7 @@ fn background_style_list_has_three_entries() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name == "a:bgFillStyleLst" {
+            if element.name == "bgFillStyleLst" {
                 assert!(
                     children(element).len() >= 3,
                     "{part}: a:bgFillStyleLst should ship three background fills"
@@ -207,10 +207,10 @@ fn background_style_list_has_three_entries() {
 fn slide_children_follow_the_schema_order() {
     let path = build_deck("sld");
     for (part, root) in xml_parts(&path) {
-        if root.name != "p:sld" {
+        if root.name != "sld" {
             continue;
         }
-        let order = ["p:cSld", "p:clrMapOvr", "p:transition"];
+        let order = ["cSld", "clrMapOvr", "transition"];
         let positions: Vec<usize> = order
             .iter()
             .map(|name| {
@@ -237,7 +237,7 @@ fn no_legacy_element_names_survive() {
         walk(&root, &mut all);
         for element in all {
             assert_ne!(
-                element.name, "a:cTo",
+                element.name, "cTo",
                 "{part}: legacy <a:cTo> element (should be <a:cubicBezTo>)"
             );
         }
@@ -256,7 +256,7 @@ fn theme_colors_are_six_hex_digits_without_hash() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "a:srgbClr" {
+            if element.name != "srgbClr" {
                 continue;
             }
             let val = element
@@ -281,7 +281,7 @@ fn complex_script_font_is_not_empty() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "a:cs" {
+            if element.name != "cs" {
                 continue;
             }
             let typeface = element
@@ -306,13 +306,13 @@ fn clr_map_overrides_use_master_mapping() {
         let mut all = Vec::new();
         walk(&root, &mut all);
         for element in all {
-            if element.name != "p:clrMapOvr" {
+            if element.name != "clrMapOvr" {
                 continue;
             }
             let child = children(element);
             assert_eq!(child.len(), 1, "{part}: clrMapOvr must have one child");
             assert_eq!(
-                child[0].name, "a:masterClrMapping",
+                child[0].name, "masterClrMapping",
                 "{part}: clrMapOvr should carry a:masterClrMapping"
             );
         }
@@ -344,12 +344,11 @@ fn every_relationship_resolves_to_an_existing_part() {
         let base_dir = if part_name == "_rels/.rels" {
             std::path::Path::new("")
         } else {
-            let dir = std::path::Path::new(&part_name)
+            std::path::Path::new(&part_name)
                 .parent()
                 .unwrap()
                 .parent()
-                .unwrap();
-            dir
+                .unwrap()
         };
         for rel in root.children.iter().filter_map(|node| match node {
             XMLNode::Element(e) if e.name == "Relationship" => Some(e),
@@ -378,4 +377,73 @@ fn every_relationship_resolves_to_an_existing_part() {
             );
         }
     }
+}
+
+#[test]
+fn text_boxes_have_zero_insets_and_120_line_spacing() {
+    // Kimi parity: a bodyPr without explicit insets falls back to the OOXML
+    // 0.1" (91440 EMU) default, which shifts text ~7px off the authored
+    // position in small boxes; the renderer also emits 120% line spacing.
+    let path = build_deck("text-parity");
+    let root = xml_parts(&path)
+        .into_iter()
+        .find(|(name, _)| name.ends_with("slides/slide1.xml"))
+        .map(|(_, r)| r)
+        .expect("deck has slide1");
+    let mut sps = Vec::new();
+    walk(&root, &mut sps);
+    let sps: Vec<&Element> = sps.into_iter().filter(|e| e.name == "sp").collect();
+    assert!(sps.len() >= 3, "guard sees no shapes (saw {})", sps.len());
+    let mut found_body = 0;
+    for sp in &sps {
+        let Some(tx_body) = sp.children.iter().find_map(|n| match n {
+            XMLNode::Element(e) if e.name == "txBody" => Some(e),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(bp) = tx_body.children.iter().find_map(|n| match n {
+            XMLNode::Element(e) if e.name == "bodyPr" => Some(e),
+            _ => None,
+        }) else {
+            continue;
+        };
+        found_body += 1;
+        for key in ["lIns", "rIns", "tIns", "bIns", "rtlCol"] {
+            assert_eq!(
+                bp.attributes.get(key).map(String::as_str),
+                Some("0"),
+                "text box must zero the {key} inset (kimi parity)"
+            );
+        }
+        let p = tx_body
+            .children
+            .iter()
+            .find_map(|n| match n {
+                XMLNode::Element(e) if e.name == "p" => Some(e),
+                _ => None,
+            })
+            .expect("text box has a paragraph");
+        let ppr = p
+            .children
+            .iter()
+            .find_map(|n| match n {
+                XMLNode::Element(e) if e.name == "pPr" => Some(e),
+                _ => None,
+            })
+            .expect("paragraph carries explicit pPr (kimi parity)");
+        assert!(
+            ppr.attributes.contains_key("algn"),
+            "paragraph pPr carries explicit alignment (kimi parity)"
+        );
+        let has_ln_spc = ppr
+            .children
+            .iter()
+            .any(|n| matches!(n, XMLNode::Element(e) if e.name == "lnSpc"));
+        assert!(has_ln_spc, "paragraph carries lnSpc (120% default)");
+    }
+    assert!(
+        found_body >= 2,
+        "guard must observe text boxes (saw {found_body})"
+    );
 }
