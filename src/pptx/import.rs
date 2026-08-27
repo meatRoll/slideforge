@@ -994,7 +994,24 @@ fn flatten_group(
     let Some(grel) = first(el, "grpSpPr").and_then(|p| first(p, "xfrm")) else {
         return Ok(());
     };
-    let g = Xform::parse(grel).apply(outer);
+    let raw = Xform::parse(grel);
+    // Degenerate group guard. WPS emits artifact groups whose own `ext` is
+    // ~0 (or whose `ext`/`chExt` ratio collapses children to ~0) while a
+    // *parent* group enlarges them back up. Composing those scales per the
+    // OOXML spec fabricates full-size children (e.g. a phantom header banner
+    // covering the card); renderers (WPS/QuickLook) instead draw nothing for
+    // such shrinking/zero-size groups, so skip them. Enlarging groups
+    // (`ext` >> `chExt`, e.g. a 635× scale that grows a stub child to full
+    // size) are NOT skipped — their children render, matching the source.
+    let degenerate = (raw.ext.0.abs() < 12700.0 && raw.ext.1.abs() < 12700.0)
+        || (raw.ch_ext.0.abs() > 1e-3
+            && raw.ch_ext.1.abs() > 1e-3
+            && raw.ext.0 / raw.ch_ext.0 < 0.01
+            && raw.ext.1 / raw.ch_ext.1 < 0.01);
+    if degenerate {
+        return Ok(());
+    }
+    let g = raw.apply(outer);
     if let Some(rot) = g.rot {
         if rot.abs() > 1e-9 {
             ctx.skip(cnv_name(el).unwrap_or_else(|| "grpSp".into()).as_str(), "rotated groups are not supported");
