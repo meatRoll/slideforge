@@ -242,6 +242,33 @@ pub fn fill_xml(
     Ok(())
 }
 
+/// `<p:bg><p:bgPr>` fill: solid/gradient via [`fill_xml`], image via
+/// `<a:blipFill>` (resolves `r:embed` through the render context's media).
+/// Used for slide and layout backgrounds.
+pub fn bg_fill_xml(
+    xml: &mut Xml,
+    ctx: &RenderCtx<'_>,
+    theme: Option<&Theme>,
+    fill: &Fill,
+) -> Result<()> {
+    match fill {
+        Fill::Image { src, .. } => {
+            let rid = ctx.media_rid(src).ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "background image `{src}` was not registered before rendering"
+                ))
+            })?;
+            xml.start("a:blipFill", &[]);
+            xml.start("a:blip", &[("r:embed", rid.as_str())]);
+            xml.end("a:blip");
+            xml.leaf("a:stretch", &[]);
+            xml.end("a:blipFill");
+            Ok(())
+        }
+        other => fill_xml(xml, theme, other, None),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------

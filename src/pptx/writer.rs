@@ -43,7 +43,7 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use std::collections::HashMap;
 
 use crate::pptd::validate::validate_project;
-use crate::pptd::{Element, LayoutDef, Page, Presentation, Project};
+use crate::pptd::{Element, LayoutDef, Page, Presentation, Project, Theme};
 use crate::pptx::media::MediaRegistry;
 use crate::pptx::opc::{Rel, content_types_xml, ns, rel_kind, rels_xml};
 use crate::pptx::package::{ContentType, PackageEntry};
@@ -121,50 +121,124 @@ impl<'a> PptxWriter<'a> {
             theme_xml(presentation.theme.as_ref()),
         ));
 
-        // slide master + layouts (structural skeleton)
+        // SlideForge layout extension (P3): if the deck declares layouts,
+        // emit one real slideLayout per key (background + decorative
+        // elements) and point each slide at its layout. Otherwise fall back
+        // to a single synthesized blank layout (canonical PPTD decks).
+        let layouts_owned: Vec<(String, LayoutDef)> = match &presentation.layouts {
+            Some(m) if !m.is_empty() => {
+                let mut v: Vec<(String, LayoutDef)> =
+                    m.iter().map(|(k, d)| (k.clone(), d.clone())).collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            }
+            _ => Vec::new(),
+        };
+        let has_real_layouts = !layouts_owned.is_empty();
+        let layout_index: HashMap<String, usize> = layouts_owned
+            .iter()
+            .enumerate()
+            .map(|(i, (k, _))| (k.clone(), i + 1))
+            .collect();
+
+        // slide master (skeleton; sldLayoutIdLst lists every layout).
+        let layout_count = if has_real_layouts { layouts_owned.len() } else { 1 };
         entries.push(PackageEntry::typed(
             "ppt/slideMasters/slideMaster1.xml",
             ContentType::SlideMaster,
-            slide_master_xml(),
+            slide_master_xml(layout_count),
         ));
-        entries.push(PackageEntry::typed(
-            "ppt/slideLayouts/slideLayout1.xml",
-            ContentType::SlideLayout,
-            slide_layout_xml(),
-        ));
+        let mut master_rels: Vec<Rel> = Vec::new();
+        if has_real_layouts {
+            for i in 1..=layouts_owned.len() {
+                master_rels.push(Rel::new(
+                    &format!("rId{i}"),
+                    rel_kind::SLIDE_LAYOUT,
+                    format!("../slideLayouts/slideLayout{i}.xml"),
+                ));
+            }
+            master_rels.push(Rel::new(
+                &format!("rId{}", layouts_owned.len() + 1),
+                rel_kind::THEME,
+                "../theme/theme1.xml",
+            ));
+        } else {
+            master_rels.push(Rel::new(
+                "rId1",
+                rel_kind::SLIDE_LAYOUT,
+                "../slideLayouts/slideLayout1.xml",
+            ));
+            master_rels.push(Rel::new("rId2", rel_kind::THEME, "../theme/theme1.xml"));
+        }
         entries.push(PackageEntry::opaque(
             "ppt/slideMasters/_rels/slideMaster1.xml.rels",
-            rels_xml(&[
-                Rel::new(
+            rels_xml(&master_rels),
+        ));
+
+        if has_real_layouts {
+            // Real layouts: one slideLayout part per key, each carrying its
+            // background + decorative elements (non-selectable on slides).
+            for (i, (_key, def)) in layouts_owned.iter().enumerate() {
+                let ln = i + 1;
+                let lmedia = collect_media_from(def.background.as_ref(), &def.elements);
+                let mut ctx = render::RenderCtx::new(presentation.theme.as_ref());
+                ctx.media = lmedia.clone();
+                for src in &lmedia {
+                    let part_index = media.index_of(src)?;
+                    ctx.image_sizes.push((src.clone(), media.part(part_index).size));
+                }
+                entries.push(PackageEntry::typed(
+                    format!("ppt/slideLayouts/slideLayout{ln}.xml"),
+                    ContentType::SlideLayout,
+                    layout_xml(def, &mut ctx, presentation.theme.as_ref())?,
+                ));
+                let mut rels = vec![Rel::new(
                     "rId1",
-                    rel_kind::SLIDE_LAYOUT,
-                    "../slideLayouts/slideLayout1.xml",
-                ),
-                Rel::new("rId2", rel_kind::THEME, "../theme/theme1.xml"),
-            ]),
-        ));
-        entries.push(PackageEntry::opaque(
-            "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
-            rels_xml(&[Rel::new(
-                "rId1",
-                rel_kind::SLIDE_MASTER,
-                "../slideMasters/slideMaster1.xml",
-            )]),
-        ));
+                    rel_kind::SLIDE_MASTER,
+                    "../slideMasters/slideMaster1.xml",
+                )];
+                for (pos, src) in lmedia.iter().enumerate() {
+                    let part_index = media.index_of(src)?;
+                    let path = media.part(part_index).package_path.clone();
+                    rels.push(Rel::new(
+                        &format!("rId{}", pos + 2),
+                        rel_kind::IMAGE,
+                        rel_target(&path),
+                    ));
+                }
+                entries.push(PackageEntry::opaque(
+                    format!("ppt/slideLayouts/_rels/slideLayout{ln}.xml.rels"),
+                    rels_xml(&rels),
+                ));
+            }
+        } else {
+            // Blank fallback layout (canonical PPTD decks without layouts).
+            entries.push(PackageEntry::typed(
+                "ppt/slideLayouts/slideLayout1.xml",
+                ContentType::SlideLayout,
+                slide_layout_xml(),
+            ));
+            entries.push(PackageEntry::opaque(
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+                rels_xml(&[Rel::new(
+                    "rId1",
+                    rel_kind::SLIDE_MASTER,
+                    "../slideMasters/slideMaster1.xml",
+                )]),
+            ));
+        }
 
         // slides
         for (i, page) in pages.iter().enumerate() {
             let index = i + 1;
-
-            // Register this slide's media up front so rendering can resolve
-            // relationship ids and image dimensions.
-            let used = collect_media(page, presentation.layouts.as_ref());
+            // P3: slide media = own background image + own element images
+            // (layout decorations live on the slideLayout part now).
+            let used = collect_media_from(page.background.as_ref(), &page.elements);
             let mut ctx = render::RenderCtx::new(presentation.theme.as_ref());
             ctx.media = used.clone();
             for src in &used {
                 let part_index = media.index_of(src)?;
-                ctx.image_sizes
-                    .push((src.clone(), media.part(part_index).size));
+                ctx.image_sizes.push((src.clone(), media.part(part_index).size));
             }
 
             entries.push(PackageEntry::typed(
@@ -173,24 +247,22 @@ impl<'a> PptxWriter<'a> {
                 self.slide_xml(index, page, &mut ctx)?,
             ));
 
-            // Slide relationships: rId1 = layout, then media in usage order.
-            let mut rels = vec![Rel::new(
-                "rId1",
-                rel_kind::SLIDE_LAYOUT,
-                "../slideLayouts/slideLayout1.xml",
-            )];
+            // rId1 → this slide's layout (real layout part, or blank fallback).
+            let layout_target = match (page.layout.as_deref(), has_real_layouts) {
+                (Some(k), true) => {
+                    let ln = layout_index.get(k).copied().unwrap_or(1);
+                    format!("../slideLayouts/slideLayout{ln}.xml")
+                }
+                _ => "../slideLayouts/slideLayout1.xml".to_string(),
+            };
+            let mut rels = vec![Rel::new("rId1", rel_kind::SLIDE_LAYOUT, &layout_target)];
             for (pos, src) in used.iter().enumerate() {
                 let part_index = media.index_of(src)?;
-                let part = media.part(part_index);
+                let path = media.part(part_index).package_path.clone();
                 rels.push(Rel::new(
                     &format!("rId{}", pos + 2),
                     rel_kind::IMAGE,
-                    format!(
-                        "../{}",
-                        part.package_path
-                            .strip_prefix("ppt/")
-                            .unwrap_or(&part.package_path)
-                    ),
+                    rel_target(&path),
                 ));
             }
             entries.push(PackageEntry::opaque(
@@ -252,19 +324,6 @@ impl<'a> PptxWriter<'a> {
         ctx: &mut render::RenderCtx<'_>,
     ) -> Result<String> {
         let theme = self.project.presentation.theme.as_ref();
-        // SlideForge layout extension (P2 bake-merge): when a page
-        // references a layout, inherit its background (if the page doesn't
-        // set its own) and paint its decorative elements UNDER the page's
-        // own. P3 will replace this with real slideLayout parts.
-        let layouts = &self.project.presentation.layouts;
-        let layout_def = page
-            .layout
-            .as_ref()
-            .and_then(|key| layouts.as_ref().and_then(|m| m.get(key)));
-        let background = page
-            .background
-            .as_ref()
-            .or_else(|| layout_def.and_then(|l| l.background.as_ref()));
         let mut x = Xml::new();
         x.start(
             "p:sld",
@@ -276,21 +335,19 @@ impl<'a> PptxWriter<'a> {
             ],
         );
         x.start("p:cSld", &[]);
-        if let Some(background) = background {
+        // P3: the slide carries only its own background + content. Layout
+        // decorations live on the referenced slideLayout part (non-selectable
+        // on the slide); a missing `background` inherits the layout's `<p:bg>`.
+        if let Some(background) = &page.background {
             x.start("p:bg", &[]);
             x.start("p:bgPr", &[]);
-            render::fill_xml(&mut x, theme, background, None)?;
+            render::bg_fill_xml(&mut x, ctx, theme, background)?;
             x.leaf("a:effectLst", &[]);
             x.end("p:bgPr");
             x.end("p:bg");
         }
         x.start("p:spTree", &[]);
         group_prolog(&mut x);
-        if let Some(l) = layout_def {
-            for element in &l.elements {
-                render::render_element(&mut x, ctx, element, index - 1)?;
-            }
-        }
         for element in &page.elements {
             render::render_element(&mut x, ctx, element, index - 1)?;
         }
@@ -386,7 +443,7 @@ fn presentation_xml(presentation: &Presentation) -> Vec<u8> {
     x.into_string().into_bytes()
 }
 
-fn slide_master_xml() -> String {
+fn slide_master_xml(layout_count: usize) -> String {
     let mut x = Xml::new();
     x.start(
         "p:sldMaster",
@@ -427,7 +484,12 @@ fn slide_master_xml() -> String {
         ],
     );
     x.start("p:sldLayoutIdLst", &[]);
-    x.leaf("p:sldLayoutId", &[("id", "2147483649"), ("r:id", "rId1")]);
+    // rId1..rId{layout_count} → layouts (master rels list them, theme after).
+    for i in 1..=layout_count {
+        let rid = format!("rId{i}");
+        let id = (2147483648 + i).to_string();
+        x.leaf("p:sldLayoutId", &[("id", &id), ("r:id", &rid)]);
+    }
     x.end("p:sldLayoutIdLst");
     x.start("p:txStyles", &[]);
     emit_tx_style(&mut x, "p:titleStyle", "4400");
@@ -474,34 +536,74 @@ fn slide_layout_xml() -> String {
     x.into_string()
 }
 
-/// Media sources referenced by a page (in element order, deduplicated).
-/// Includes images inherited from a referenced layout (bake-merge paints
-/// the layout's decorative elements under the page's own).
-fn collect_media(
-    page: &Page,
-    layouts: Option<&HashMap<String, LayoutDef>>,
-) -> Vec<String> {
+/// Media sources referenced by a fill (its image, if any) plus a set of
+/// elements (their `Image`s), in order, deduplicated. Used to register a
+/// slide's or layout's own media for relationship ids.
+fn collect_media_from(background: Option<&crate::pptd::shared::Fill>, elements: &[Element]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let layout_def = page
-        .layout
-        .as_ref()
-        .and_then(|key| layouts.and_then(|m| m.get(key)));
     let mut push = |src: &str, out: &mut Vec<String>| {
         if !out.iter().any(|s| s == src) {
             out.push(src.to_string());
         }
     };
-    if let Some(l) = layout_def {
-        for element in &l.elements {
-            if let Element::Image(image) = element {
-                push(&image.src, &mut out);
-            }
-        }
+    if let Some(crate::pptd::shared::Fill::Image { src, .. }) = background {
+        push(src, &mut out);
     }
-    for element in &page.elements {
+    for element in elements {
         if let Element::Image(image) = element {
             push(&image.src, &mut out);
         }
     }
     out
+}
+
+/// A media part's target path relative to a slide/layout part dir.
+fn rel_target(package_path: &str) -> String {
+    format!(
+        "../{}",
+        package_path.strip_prefix("ppt/").unwrap_or(package_path)
+    )
+}
+
+/// Render a [`LayoutDef`] as a real `slideLayout{N}.xml`: its background
+/// (`<p:bg>`) + decorative elements in the spTree. Placeholders are not
+/// emitted here (P3-core treats slide placeholders as plain shapes; a
+/// future refinement can emit `<p:ph>` defs).
+fn layout_xml(
+    def: &LayoutDef,
+    ctx: &mut render::RenderCtx<'_>,
+    theme: Option<&Theme>,
+) -> Result<String> {
+    let mut x = Xml::new();
+    x.start(
+        "p:sldLayout",
+        &[
+            ("xmlns:p", ns::PRESENTATIONML),
+            ("xmlns:a", ns::DRAWINGML),
+            ("xmlns:r", ns::RELATIONSHIPS),
+            ("type", "blank"),
+            ("preserve", "1"),
+        ],
+    );
+    x.start("p:cSld", &[("name", "Slide Layout")]);
+    if let Some(background) = &def.background {
+        x.start("p:bg", &[]);
+        x.start("p:bgPr", &[]);
+        render::bg_fill_xml(&mut x, ctx, theme, background)?;
+        x.leaf("a:effectLst", &[]);
+        x.end("p:bgPr");
+        x.end("p:bg");
+    }
+    x.start("p:spTree", &[]);
+    group_prolog(&mut x);
+    for element in &def.elements {
+        render::render_element(&mut x, ctx, element, 0)?;
+    }
+    x.end("p:spTree");
+    x.end("p:cSld");
+    x.start("p:clrMapOvr", &[]);
+    x.leaf("a:masterClrMapping", &[]);
+    x.end("p:clrMapOvr");
+    x.end("p:sldLayout");
+    Ok(x.into_string())
 }
