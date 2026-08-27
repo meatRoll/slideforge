@@ -827,8 +827,11 @@ fn merge_def_rpr(mut base: MasterDefaults, rpr: &XmlEl, slots: &SlotColors) -> M
 }
 
 /// `txBody > lstStyle > lvl1pPr` → merged run-style defaults (`defRPr`) plus
-/// the bullet glyph / hanging indent. Returns `base` unchanged when the box
-/// has no `lstStyle` (plain text boxes / placeholders inherit elsewhere).
+/// the bullet glyph / hanging indent. WPS puts the bullet on each `<a:pPr>`
+/// (not the lstStyle), so paragraph-level `buChar`/`buFont`/`marL`/`indent`
+/// override the lstStyle defaults; `buNone` clears the bullet. The PPTD model
+/// carries one bullet per `TextContent`, so the first paragraph with a bullet
+/// spec wins (uniform bulleted lists — the common case).
 fn lst_style_info(
     base: MasterDefaults,
     tx_body: &XmlEl,
@@ -836,22 +839,46 @@ fn lst_style_info(
 ) -> (MasterDefaults, BulletInfo) {
     let mut d = base;
     let mut bullet = BulletInfo::default();
-    let Some(lst) = first(tx_body, "lstStyle") else { return (d, bullet); };
-    let Some(lvl1) = first(lst, "lvl1pPr") else { return (d, bullet); };
-    if let Some(v) = attr(lvl1, "marL").and_then(|s| s.parse::<f64>().ok()) {
-        bullet.margin = Some(px(v));
+    // 1. lstStyle lvl1pPr: run-style defaults + a fallback bullet.
+    if let Some(lst) = first(tx_body, "lstStyle") {
+        if let Some(lvl1) = first(lst, "lvl1pPr") {
+            if let Some(v) = attr(lvl1, "marL").and_then(|s| s.parse::<f64>().ok()) {
+                bullet.margin = Some(px(v));
+            }
+            if let Some(v) = attr(lvl1, "indent").and_then(|s| s.parse::<f64>().ok()) {
+                bullet.indent = Some(px(v));
+            }
+            if let Some(bf) = first(lvl1, "buFont").and_then(|e| attr(e, "typeface")) {
+                bullet.font = Some(bf.to_string());
+            }
+            if let Some(bc) = first(lvl1, "buChar").and_then(|e| attr(e, "char")) {
+                bullet.char = Some(bc.to_string());
+            }
+            if let Some(rpr) = first(lvl1, "defRPr") {
+                d = merge_def_rpr(d, rpr, slots);
+            }
+        }
     }
-    if let Some(v) = attr(lvl1, "indent").and_then(|s| s.parse::<f64>().ok()) {
-        bullet.indent = Some(px(v));
-    }
-    if let Some(bf) = first(lvl1, "buFont").and_then(|e| attr(e, "typeface")) {
-        bullet.font = Some(bf.to_string());
-    }
-    if let Some(bc) = first(lvl1, "buChar").and_then(|e| attr(e, "char")) {
-        bullet.char = Some(bc.to_string());
-    }
-    if let Some(rpr) = first(lvl1, "defRPr") {
-        d = merge_def_rpr(d, rpr, slots);
+    // 2. Paragraph-level `<a:pPr>` overrides (the common WPS case).
+    for p in children(tx_body, "p") {
+        let Some(pp) = first(p, "pPr") else { continue; };
+        if first(pp, "buNone").is_some() {
+            bullet = BulletInfo::default();
+            continue;
+        }
+        if let Some(v) = attr(pp, "marL").and_then(|s| s.parse::<f64>().ok()) {
+            bullet.margin = Some(px(v));
+        }
+        if let Some(v) = attr(pp, "indent").and_then(|s| s.parse::<f64>().ok()) {
+            bullet.indent = Some(px(v));
+        }
+        if let Some(bf) = first(pp, "buFont").and_then(|e| attr(e, "typeface")) {
+            bullet.font = Some(bf.to_string());
+        }
+        if let Some(bc) = first(pp, "buChar").and_then(|e| attr(e, "char")) {
+            bullet.char = Some(bc.to_string());
+        }
+        break;
     }
     (d, bullet)
 }
@@ -1427,6 +1454,24 @@ fn map_sp(
                 fill,
                 border,
                 placeholder,
+            })));
+        }
+        // Empty placeholder (e.g. an unfilled `<p:ph type="title"/>`):
+        // keep it as a placeholder shape so the renderer shows the prompt
+        // ("Click to edit title"). WPS only renders the prompt for typed
+        // `<p:ph>` placeholders with an empty txBody.
+        if ph.is_some() {
+            let id = ctx.unique_id(&name, "text");
+            let placeholder = ph
+                .and_then(|p| attr(p, "type"))
+                .unwrap_or("body")
+                .to_string();
+            return Ok(Some(Element::Text(Text {
+                common: common(&x, id),
+                content: TextContent::default(),
+                fill: None,
+                border: None,
+                placeholder: Some(placeholder),
             })));
         }
         // Empty text bodies: invisible padding boxes — only keep them when
@@ -2483,9 +2528,11 @@ fn text_content(
 
     let first = &out_lines[0];
     let align = first.align;
-    // Explicit single spacing: the renderer would otherwise default to 120%
-    // (kimi's choice), but a source box without any lnSpc renders at 100%.
-    let line_height = first.line_height.or(Some(1.0));
+    // Line height is only carried when the source paragraph set an explicit
+    // `<a:lnSpc>`. A box without one renders at the renderer's natural
+    // line height (QuickLook/WPS ≈ 1.2× font), and emitting `spcPct=100000`
+    // would force a tight 1.0× that doesn't match the source.
+    let line_height = first.line_height;
     let run_style = first.runs.first().and_then(|(st, _)| st.clone());
     if first.runs.iter().all(|(_, t)| t.is_empty()) && out_lines.len() == 1 {
         return None; // textless box
@@ -2515,10 +2562,9 @@ fn text_content(
             }
             // Force an explicit value so the renderer never falls back to the
             // 120% default.
-            style_parts.push(format!(
-                "line-height:{}",
-                l.line_height.unwrap_or(1.0)
-            ));
+            if let Some(lh) = l.line_height {
+                style_parts.push(format!("line-height:{}", lh));
+            }
             if let Some(mt) = l.margin_top_px {
                 style_parts.push(format!("margin-top:{mt}px"));
             }

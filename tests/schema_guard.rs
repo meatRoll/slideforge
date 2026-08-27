@@ -380,10 +380,13 @@ fn every_relationship_resolves_to_an_existing_part() {
 }
 
 #[test]
-fn text_boxes_have_zero_insets_and_120_line_spacing() {
+fn text_boxes_have_zero_insets() {
     // Kimi parity: a bodyPr without explicit insets falls back to the OOXML
     // 0.1" (91440 EMU) default, which shifts text ~7px off the authored
-    // position in small boxes; the renderer also emits 120% line spacing.
+    // position in small boxes. Line spacing is NOT forced: a PPTD paragraph
+    // without `lineHeight` emits no `<a:lnSpc>` so the renderer uses its
+    // natural default (QuickLook/WPS ≈ 1.2× font), matching a source box
+    // that carried no `<a:lnSpc>` (forcing `spcPct=120000` rendered tight).
     let path = build_deck("text-parity");
     let root = xml_parts(&path)
         .into_iter()
@@ -463,11 +466,13 @@ fn text_boxes_have_zero_insets_and_120_line_spacing() {
             Some(&run_sz),
             "endParaRPr sz must equal the run sz (kimi parity)"
         );
+        // No `<a:lnSpc>` when the PPTD carries no `lineHeight` — let the
+        // renderer use its natural default (faithful to a source with none).
         let has_ln_spc = ppr
             .children
             .iter()
             .any(|n| matches!(n, XMLNode::Element(e) if e.name == "lnSpc"));
-        assert!(has_ln_spc, "paragraph carries lnSpc (120% default)");
+        assert!(!has_ln_spc, "no lnSpc when PPTD has no lineHeight");
     }
     assert!(
         found_body >= 2,

@@ -576,12 +576,24 @@ fn render_text(
     let name = text.common.element_id.clone();
     let style = effective_text_style(ctx.theme, &text.content);
 
+    let is_empty_placeholder = text.placeholder.is_some() && text.content.text.is_empty();
+
     xml.start("p:sp", &[]);
     xml.start("p:nvSpPr", &[]);
     xml.start("p:cNvPr", &[("id", &id), ("name", &name)]);
     xml.end("p:cNvPr");
-    xml.leaf("p:cNvSpPr", &[("txBox", "1")]);
-    xml.leaf("p:nvPr", &[]);
+    if is_empty_placeholder {
+        // Typed placeholder (empty) — WPS renders the prompt
+        // ("Click to edit title") for `<p:ph type>` + empty txBody.
+        let ph_type = text.placeholder.as_deref().unwrap_or("body");
+        xml.leaf("p:cNvSpPr", &[]);
+        xml.start("p:nvPr", &[]);
+        xml.leaf("p:ph", &[("type", ph_type)]);
+        xml.end("p:nvPr");
+    } else {
+        xml.leaf("p:cNvSpPr", &[("txBox", "1")]);
+        xml.leaf("p:nvPr", &[]);
+    }
     xml.end("p:nvSpPr");
 
     xml.start("p:spPr", &[]);
@@ -615,6 +627,18 @@ fn render_text(
         VerticalAlign::Middle => "ctr",
         VerticalAlign::Bottom => "b",
     };
+
+    // Empty typed placeholder: emit a minimal empty txBody so the renderer
+    // shows the placeholder prompt ("Click to edit title").
+    if is_empty_placeholder {
+        xml.start("p:txBody", &[]);
+        xml.leaf("a:bodyPr", &[("anchor", anchor), ("wrap", "square")]);
+        xml.leaf("a:lstStyle", &[]);
+        xml.leaf("a:p", &[]);
+        xml.end("p:txBody");
+        xml.end("p:sp");
+        return Ok(());
+    }
 
     // Rich text (`<p>`/`<span>`/`<strong>` …): parse paragraph + run styles.
     if text.content.text.contains('<') {
@@ -678,7 +702,10 @@ fn render_text(
             .map(|px| ((px * 100.0).round() as u64).to_string());
 
         // Kimi emits paragraph properties for every paragraph: explicit
-        // alignment plus the renderer's default 120% line spacing.
+        // alignment. Line spacing is only emitted when the PPTD carries an
+        // explicit value; otherwise omit `<a:lnSpc>` so the renderer uses
+        // its natural default (QuickLook/WPS ≈ 1.2× font), matching a source
+        // box that had no `<a:lnSpc>`.
         ppr_open(xml, algn, &style);
         if let Some(pct) = line_height_pct {
             xml.start("a:lnSpc", &[]);
@@ -687,10 +714,6 @@ fn render_text(
         } else if let Some(pts) = line_height_pts {
             xml.start("a:lnSpc", &[]);
             xml.leaf("a:spcPts", &[("val", &pts)]);
-            xml.end("a:lnSpc");
-        } else {
-            xml.start("a:lnSpc", &[]);
-            xml.leaf("a:spcPct", &[("val", "120000")]);
             xml.end("a:lnSpc");
         }
         emit_bullet(xml, &style);
@@ -1032,10 +1055,6 @@ fn render_rich_body(
             } else if let Some(pts) = line_height_pts {
                 xml.start("a:lnSpc", &[]);
                 xml.leaf("a:spcPts", &[("val", &pts)]);
-                xml.end("a:lnSpc");
-            } else {
-                xml.start("a:lnSpc", &[]);
-                xml.leaf("a:spcPct", &[("val", "120000")]);
                 xml.end("a:lnSpc");
             }
         }
