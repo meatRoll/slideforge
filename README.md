@@ -95,6 +95,16 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
 - [x] pptx → pptd 反向解析（`slideforge convert`，含 40 页模板往返像素级回归）
 - [ ] 图表 → 原生 OOXML chart parts 、动画 → `p:timing`、备注 → notesSlide
 
+## 开发约定
+
+CI（`.github/workflows/ci.yml`）会跑 `cargo fmt --all -- --check` / clippy / test。为了在本地提前发现格式漂移，仓库随附了一个 tracked 的 git hook：
+
+```bash
+./scripts/install-hooks.sh   # 一次性：把 core.hooksPath 指向 .githooks/
+```
+
+装好后 `git commit` 会先跑 `cargo fmt --all -- --check`，失败时拒绝提交并提示运行 `cargo fmt --all` 后重新 `git add`。CI 与本地钩子使用同一命令，避免「CI 红 / 本地绿」。
+
 ## 许可证
 
 MIT OR Apache-2.0

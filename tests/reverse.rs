@@ -15,10 +15,8 @@ fn fixture_dir() -> PathBuf {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "slideforge-roundtrip-{tag}-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("slideforge-roundtrip-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -29,7 +27,9 @@ fn buildable_fixture_roundtrips() {
     let work = temp_dir("fixture");
     let first_pptx = work.join("first.pptx");
     let project = pptd::load_project(&fixture_dir().join("buildable.pptd")).unwrap();
-    pptx::writer::PptxWriter::new(&project).build(&first_pptx).unwrap();
+    pptx::writer::PptxWriter::new(&project)
+        .build(&first_pptx)
+        .unwrap();
 
     let converted = work.join("converted");
     let report = pptx::import::convert_pptx_to_pptd(&first_pptx, &converted).unwrap();
@@ -48,7 +48,9 @@ fn buildable_fixture_roundtrips() {
     // Rebuild from the converted PPTD; must open and re-parse.
     let second_pptx = work.join("second.pptx");
     let project = pptd::load_project(&converted.join("deck.pptd")).unwrap();
-    pptx::writer::PptxWriter::new(&project).build(&second_pptx).unwrap();
+    pptx::writer::PptxWriter::new(&project)
+        .build(&second_pptx)
+        .unwrap();
 
     // The regenerated package has the same number of slides and media.
     let first = zip::ZipArchive::new(fs::File::open(&first_pptx).unwrap()).unwrap();
@@ -67,7 +69,9 @@ fn reverse_keeps_theme_colors_and_size() {
     let work = temp_dir("theme");
     let pptx_path = work.join("t.pptx");
     let project = pptd::load_project(&fixture_dir().join("buildable.pptd")).unwrap();
-    pptx::writer::PptxWriter::new(&project).build(&pptx_path).unwrap();
+    pptx::writer::PptxWriter::new(&project)
+        .build(&pptx_path)
+        .unwrap();
 
     let converted = work.join("converted");
     pptx::import::convert_pptx_to_pptd(&pptx_path, &converted).unwrap();

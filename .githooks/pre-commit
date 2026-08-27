@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Block commits that don't pass `cargo fmt --all -- --check`.
+# CI runs the same check; this hook surfaces the failure locally
+# before pushing, matching the workflow in `.github/workflows/ci.yml`.
+set -euo pipefail
+
+if ! cargo fmt --all -- --check; then
+  cat >&2 <<'EOF'
+pre-commit: cargo fmt check failed.
+
+  Run `cargo fmt --all`, review the diff, and `git add` the result.
+
+EOF
+  exit 1
+fi

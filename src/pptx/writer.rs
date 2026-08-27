@@ -43,7 +43,9 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use std::collections::HashMap;
 
 use crate::pptd::validate::validate_project;
-use crate::pptd::{Element, FontFamily, LayoutDef, Page, Presentation, Project, Theme, TextStyleConfig};
+use crate::pptd::{
+    Element, FontFamily, LayoutDef, Page, Presentation, Project, TextStyleConfig, Theme,
+};
 use crate::pptx::media::MediaRegistry;
 use crate::pptx::opc::{Rel, content_types_xml, ns, rel_kind, rels_xml};
 use crate::pptx::package::{ContentType, PackageEntry};
@@ -142,7 +144,11 @@ impl<'a> PptxWriter<'a> {
             .collect();
 
         // slide master (skeleton; sldLayoutIdLst lists every layout).
-        let layout_count = if has_real_layouts { layouts_owned.len() } else { 1 };
+        let layout_count = if has_real_layouts {
+            layouts_owned.len()
+        } else {
+            1
+        };
         entries.push(PackageEntry::typed(
             "ppt/slideMasters/slideMaster1.xml",
             ContentType::SlideMaster,
@@ -185,7 +191,8 @@ impl<'a> PptxWriter<'a> {
                 ctx.media = lmedia.clone();
                 for src in &lmedia {
                     let part_index = media.index_of(src)?;
-                    ctx.image_sizes.push((src.clone(), media.part(part_index).size));
+                    ctx.image_sizes
+                        .push((src.clone(), media.part(part_index).size));
                 }
                 entries.push(PackageEntry::typed(
                     format!("ppt/slideLayouts/slideLayout{ln}.xml"),
@@ -238,7 +245,8 @@ impl<'a> PptxWriter<'a> {
             ctx.media = used.clone();
             for src in &used {
                 let part_index = media.index_of(src)?;
-                ctx.image_sizes.push((src.clone(), media.part(part_index).size));
+                ctx.image_sizes
+                    .push((src.clone(), media.part(part_index).size));
             }
 
             entries.push(PackageEntry::typed(
@@ -591,7 +599,10 @@ fn slide_layout_xml() -> String {
 /// Media sources referenced by a fill (its image, if any) plus a set of
 /// elements (their `Image`s), in order, deduplicated. Used to register a
 /// slide's or layout's own media for relationship ids.
-fn collect_media_from(background: Option<&crate::pptd::shared::Fill>, elements: &[Element]) -> Vec<String> {
+fn collect_media_from(
+    background: Option<&crate::pptd::shared::Fill>,
+    elements: &[Element],
+) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let push = |src: &str, out: &mut Vec<String>| {
         if !out.iter().any(|s| s == src) {

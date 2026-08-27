@@ -95,9 +95,8 @@ type SlotColors = BTreeMap<String, String>;
 
 /// Convert a `.pptx` package into a PPTD project directory.
 pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertReport> {
-    let file = fs::File::open(input).map_err(|e| {
-        Error::Invalid(format!("cannot open {}: {e}", input.display()))
-    })?;
+    let file = fs::File::open(input)
+        .map_err(|e| Error::Invalid(format!("cannot open {}: {e}", input.display())))?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| Error::Invalid(format!("not a valid OPC zip ({}): {e}", input.display())))?;
 
@@ -133,9 +132,8 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
     // Slides in `sldIdLst` presentation order (not archive order).
     let slide_parts = presentation_slides(&pres, &mut zip, &presentation_part)?;
 
-    fs::create_dir_all(out_dir.join("pages")).map_err(|e| {
-        Error::Invalid(format!("create pages dir: {e}"))
-    })?;
+    fs::create_dir_all(out_dir.join("pages"))
+        .map_err(|e| Error::Invalid(format!("create pages dir: {e}")))?;
 
     // Media are collected during element extraction and copied once.
     let mut media: BTreeMap<String, String> = BTreeMap::new(); // part path -> basename
@@ -234,12 +232,10 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
             .map_err(|e| Error::Invalid(format!("read media part {part_path}: {e}")))?
             .read_to_end(&mut data)
             .map_err(|e| Error::Invalid(format!("read media part {part_path}: {e}")))?;
-        fs::create_dir_all(&media_dir).map_err(|e| {
-            Error::Invalid(format!("create media dir: {e}"))
-        })?;
-        fs::write(media_dir.join(basename), data).map_err(|e| {
-            Error::Invalid(format!("write media/{basename}: {e}"))
-        })?;
+        fs::create_dir_all(&media_dir)
+            .map_err(|e| Error::Invalid(format!("create media dir: {e}")))?;
+        fs::write(media_dir.join(basename), data)
+            .map_err(|e| Error::Invalid(format!("write media/{basename}: {e}")))?;
         media_count += 1;
     }
 
@@ -266,13 +262,17 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         custom_fonts: Vec::new(),
         size,
         theme,
-        layouts: if layouts.is_empty() { None } else { Some(layouts) },
+        layouts: if layouts.is_empty() {
+            None
+        } else {
+            Some(layouts)
+        },
         pages,
     };
-    let deck_yaml = serde_yaml::to_string(&presentation).map_err(|e| Error::Invalid(format!("serialize deck: {e}")))?;
-    fs::write(out_dir.join("deck.pptd"), deck_yaml).map_err(|e| {
-        Error::Invalid(format!("write deck.pptd: {e}"))
-    })?;
+    let deck_yaml = serde_yaml::to_string(&presentation)
+        .map_err(|e| Error::Invalid(format!("serialize deck: {e}")))?;
+    fs::write(out_dir.join("deck.pptd"), deck_yaml)
+        .map_err(|e| Error::Invalid(format!("write deck.pptd: {e}")))?;
 
     // DROP TABLE-like safety: report the skipped constructs.
     Ok(ConvertReport {
@@ -342,7 +342,11 @@ impl<'a> PageCtx<'a> {
 
     /// Unique element id derived from the drawing name.
     fn unique_id(&mut self, base: &str, fallback: &str) -> String {
-        let base = if base.trim().is_empty() { fallback } else { base.trim() };
+        let base = if base.trim().is_empty() {
+            fallback
+        } else {
+            base.trim()
+        };
         if self.used_ids.insert(base.to_string()) {
             return base.to_string();
         }
@@ -430,9 +434,8 @@ fn presentation_slides(
     zip: &mut zip::ZipArchive<fs::File>,
     presentation_part: &str,
 ) -> Result<Vec<String>> {
-    let sld_id_lst = first(pres, "sldIdLst").ok_or_else(|| {
-        Error::Invalid("presentation.xml has no p:sldIdLst".into())
-    })?;
+    let sld_id_lst = first(pres, "sldIdLst")
+        .ok_or_else(|| Error::Invalid("presentation.xml has no p:sldIdLst".into()))?;
     let rels_part = rels_part(presentation_part);
     let rels = parse_part(zip, &rels_part)?;
     let mut by_id = BTreeMap::new();
@@ -444,12 +447,11 @@ fn presentation_slides(
     let mut out = Vec::new();
     for sld_id in children(sld_id_lst, "sldId") {
         // xmltree stores attribute local names: `r:id` → `id`.
-        let rid = attr(sld_id, "id").ok_or_else(|| {
-            Error::Invalid("p:sldId missing r:id".into())
-        })?;
-        let target = by_id.get(rid).ok_or_else(|| {
-            Error::Invalid(format!("slide rId {rid} not in presentation rels"))
-        })?;
+        let rid =
+            attr(sld_id, "id").ok_or_else(|| Error::Invalid("p:sldId missing r:id".into()))?;
+        let target = by_id
+            .get(rid)
+            .ok_or_else(|| Error::Invalid(format!("slide rId {rid} not in presentation rels")))?;
         out.push(target.clone());
     }
     Ok(out)
@@ -457,9 +459,8 @@ fn presentation_slides(
 
 /// `p:sldSz` → design size in px (exact inverse of the writer).
 fn parse_size(pres: &XmlEl) -> Result<crate::pptd::shared::Size> {
-    let sz = first(pres, "sldSz").ok_or_else(|| {
-        Error::Invalid("presentation.xml has no p:sldSz".into())
-    })?;
+    let sz = first(pres, "sldSz")
+        .ok_or_else(|| Error::Invalid("presentation.xml has no p:sldSz".into()))?;
     let cx: i64 = attr(sz, "cx")
         .ok_or_else(|| Error::Invalid("sldSz missing cx".into()))?
         .parse()
@@ -580,8 +581,12 @@ fn master_defaults(
     d.title_line_spacing = ln_spc("titleStyle");
     let body = first_descendant(&master, "bodyStyle");
     let titles = first_descendant(&master, "titleStyle");
-    d.spc_bef = body.and_then(|s| first(s, "lvl1pPr")).and_then(|l| lvl1_spc_bef(l, d.sz));
-    d.title_spc_bef = titles.and_then(|s| first(s, "lvl1pPr")).and_then(|l| lvl1_spc_bef(l, d.sz));
+    d.spc_bef = body
+        .and_then(|s| first(s, "lvl1pPr"))
+        .and_then(|l| lvl1_spc_bef(l, d.sz));
+    d.title_spc_bef = titles
+        .and_then(|s| first(s, "lvl1pPr"))
+        .and_then(|l| lvl1_spc_bef(l, d.sz));
     d
 }
 
@@ -604,14 +609,20 @@ fn lvl1_spc_bef(lvl1: &XmlEl, default_sz: Option<f64>) -> Option<f64> {
 /// the layout placeholder `lstStyle` path).
 fn def_rpr_defaults(rpr: &XmlEl, slots: &SlotColors) -> MasterDefaults {
     MasterDefaults {
-        sz: attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok()).map(|s| s / 100.0),
+        sz: attr(rpr, "sz")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|s| s / 100.0),
         color: color_from_fill(rpr, slots),
         latin_typeface: first(rpr, "latin")
             .and_then(|l| attr(l, "typeface"))
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        bold: attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
-        italic: attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
+        bold: attr(rpr, "b")
+            .and_then(|s| s.parse::<u8>().ok())
+            .map(|v| v != 0),
+        italic: attr(rpr, "i")
+            .and_then(|s| s.parse::<u8>().ok())
+            .map(|v| v != 0),
         line_spacing: None,
         title_line_spacing: None,
         spc_bef: None,
@@ -637,7 +648,11 @@ fn master_text_styles(
     let Some(tx_styles) = first(&master, "txStyles") else {
         return out;
     };
-    for (key, style_name) in [("title", "titleStyle"), ("body", "bodyStyle"), ("other", "otherStyle")] {
+    for (key, style_name) in [
+        ("title", "titleStyle"),
+        ("body", "bodyStyle"),
+        ("other", "otherStyle"),
+    ] {
         let Some(style) = first(tx_styles, style_name) else {
             continue;
         };
@@ -670,7 +685,12 @@ fn master_text_styles(
                 .and_then(|sp| attr(sp, "val"))
                 .and_then(|v| v.parse::<f64>().ok())
                 .map(|v| v / 100000.0),
-            margin_top: lvl1_spc_bef(lvl1, rpr.and_then(|r| attr(r, "sz")).and_then(|s| s.parse::<f64>().ok()).map(|v| v / 100.0)),
+            margin_top: lvl1_spc_bef(
+                lvl1,
+                rpr.and_then(|r| attr(r, "sz"))
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| v / 100.0),
+            ),
             background_color: None,
             line_height_px: None,
             letter_spacing: None,
@@ -768,7 +788,12 @@ fn placeholder_proto(el: &XmlEl, slots: &SlotColors) -> Option<PlaceholderProto>
             "b" => VerticalAlign::Bottom,
             _ => VerticalAlign::Top,
         });
-    Some(PlaceholderProto { xfrm, prst, anchor, defaults })
+    Some(PlaceholderProto {
+        xfrm,
+        prst,
+        anchor,
+        defaults,
+    })
 }
 
 /// Owned bundle of a layout's build artifacts, cached per distinct layout
@@ -906,7 +931,15 @@ fn build_layout(
                     let master_rels = layout_rels(zip, master);
                     for child in tree.children.iter().filter_map(|n| n.as_element()) {
                         let mut generated = Vec::new();
-                        walk_sp_tree_child(child, &master_rels, &mut lctx, None, None, true, &mut generated)?;
+                        walk_sp_tree_child(
+                            child,
+                            &master_rels,
+                            &mut lctx,
+                            None,
+                            None,
+                            true,
+                            &mut generated,
+                        )?;
                         elements.extend(generated.into_iter().flatten());
                     }
                 }
@@ -918,7 +951,15 @@ fn build_layout(
                 let layout_rels = layout_rels(zip, layout_part);
                 for child in tree.children.iter().filter_map(|n| n.as_element()) {
                     let mut generated = Vec::new();
-                    walk_sp_tree_child(child, &layout_rels, &mut lctx, None, None, true, &mut generated)?;
+                    walk_sp_tree_child(
+                        child,
+                        &layout_rels,
+                        &mut lctx,
+                        None,
+                        None,
+                        true,
+                        &mut generated,
+                    )?;
                     elements.extend(generated.into_iter().flatten());
                 }
             }
@@ -973,8 +1014,12 @@ struct BulletInfo {
 /// A coloured "label" card (e.g. a blue rect with the word 背景) carries no
 /// explicit run colour; the white text comes from the style's fontRef.
 fn font_ref_defaults(base: MasterDefaults, sp_el: &XmlEl, slots: &SlotColors) -> MasterDefaults {
-    let Some(style) = first(sp_el, "style") else { return base; };
-    let Some(fr) = first(style, "fontRef") else { return base; };
+    let Some(style) = first(sp_el, "style") else {
+        return base;
+    };
+    let Some(fr) = first(style, "fontRef") else {
+        return base;
+    };
     let mut d = base;
     if let Some(c) = color_from_fill(fr, slots) {
         d.color = Some(c);
@@ -1046,7 +1091,9 @@ fn lst_style_info(
     }
     // 2. Paragraph-level `<a:pPr>` overrides (the common WPS case).
     for p in children(tx_body, "p") {
-        let Some(pp) = first(p, "pPr") else { continue; };
+        let Some(pp) = first(p, "pPr") else {
+            continue;
+        };
         if first(pp, "buNone").is_some() {
             bullet = BulletInfo::default();
             continue;
@@ -1116,7 +1163,10 @@ fn read_title(zip: &mut zip::ZipArchive<fs::File>) -> Result<Option<String>> {
     let Ok(core) = parse_part(zip, "docProps/core.xml") else {
         return Ok(None);
     };
-    Ok(first(&core, "title").and_then(|el| el.get_text()).map(|c| c.trim().to_string()).filter(|s| !s.is_empty()))
+    Ok(first(&core, "title")
+        .and_then(|el| el.get_text())
+        .map(|c| c.trim().to_string())
+        .filter(|s| !s.is_empty()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,12 +1180,10 @@ fn extract_slide(
     ctx: &mut PageCtx<'_>,
     rels: &BTreeMap<String, String>,
 ) -> Result<Page> {
-    let c_sld = first(slide, "cSld").ok_or_else(|| {
-        Error::Invalid(format!("slide part {part} has no p:cSld"))
-    })?;
-    let sp_tree = first(c_sld, "spTree").ok_or_else(|| {
-        Error::Invalid(format!("slide part {part} has no p:spTree"))
-    })?;
+    let c_sld = first(slide, "cSld")
+        .ok_or_else(|| Error::Invalid(format!("slide part {part} has no p:cSld")))?;
+    let sp_tree = first(c_sld, "spTree")
+        .ok_or_else(|| Error::Invalid(format!("slide part {part} has no p:spTree")))?;
 
     // SlideForge layout extension: the slide carries only its own content.
     // Master/layout decorations, background and placeholder templates now
@@ -1162,7 +1210,11 @@ fn extract_slide(
         notes: None,
         elements,
         animations: None,
-        groups: if ctx.groups.is_empty() { None } else { Some(std::mem::take(&mut ctx.groups)) },
+        groups: if ctx.groups.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut ctx.groups))
+        },
     })
 }
 
@@ -1206,11 +1258,17 @@ fn walk_sp_tree_child(
             } else {
                 "graphicFrame"
             };
-            ctx.skip(&name, format!("{kind} elements are not representable in PPTD"));
+            ctx.skip(
+                &name,
+                format!("{kind} elements are not representable in PPTD"),
+            );
             out.push(None);
         }
         "oleObj" => {
-            ctx.skip(cnv_name(el).unwrap_or_else(|| "oleObj".into()).as_str(), "embedded objects are not supported");
+            ctx.skip(
+                cnv_name(el).unwrap_or_else(|| "oleObj".into()).as_str(),
+                "embedded objects are not supported",
+            );
             out.push(None);
         }
         // nvGrpSpPr / grpSpPr are descriptors, not drawables.
@@ -1261,7 +1319,16 @@ fn flatten_group(
             match child.name.as_str() {
                 "nvGrpSpPr" | "grpSpPr" => continue,
                 "grpSp" => {
-                    flatten_group(child, rels, ctx, outer, parent_id, group_fill.as_ref(), in_layout, out)?;
+                    flatten_group(
+                        child,
+                        rels,
+                        ctx,
+                        outer,
+                        parent_id,
+                        group_fill.as_ref(),
+                        in_layout,
+                        out,
+                    )?;
                 }
                 _ => {
                     let before = out.len();
@@ -1273,7 +1340,7 @@ fn flatten_group(
                                 if let Some(sp_pr) = first(child, "spPr") {
                                     if let Some(xel) = first(sp_pr, "xfrm") {
                                         elem.common_mut().group_bounds =
-                                        Some(to_bounds(&Xform::parse(xel)));
+                                            Some(to_bounds(&Xform::parse(xel)));
                                     }
                                 }
                             }
@@ -1332,11 +1399,28 @@ fn flatten_group(
             match child.name.as_str() {
                 "nvGrpSpPr" | "grpSpPr" => continue,
                 "grpSp" => {
-                    flatten_group(child, rels, ctx, Some(&g), Some(&group_id), group_fill.as_ref(), in_layout, out)?;
+                    flatten_group(
+                        child,
+                        rels,
+                        ctx,
+                        Some(&g),
+                        Some(&group_id),
+                        group_fill.as_ref(),
+                        in_layout,
+                        out,
+                    )?;
                 }
                 _ => {
                     let before = out.len();
-                    walk_sp_tree_child(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+                    walk_sp_tree_child(
+                        child,
+                        rels,
+                        ctx,
+                        Some(&g),
+                        Some(&group_id),
+                        in_layout,
+                        out,
+                    )?;
                     for slot in &mut out[before..] {
                         if let Some(elem) = slot {
                             elem.common_mut().group_id = Some(group_id.clone());
@@ -1367,7 +1451,16 @@ fn flatten_group(
         match child.name.as_str() {
             "nvGrpSpPr" | "grpSpPr" => continue,
             "grpSp" => {
-                flatten_group(child, rels, ctx, Some(&g), parent_id, group_fill.as_ref(), in_layout, out)?;
+                flatten_group(
+                    child,
+                    rels,
+                    ctx,
+                    Some(&g),
+                    parent_id,
+                    group_fill.as_ref(),
+                    in_layout,
+                    out,
+                )?;
             }
             _ => {
                 let before = out.len();
@@ -1416,7 +1509,9 @@ impl Xform {
             ext,
             ch_off,
             ch_ext,
-            rot: attr(xfrm, "rot").and_then(|s| s.parse().ok()).map(|v: i64| v as f64 / 60000.0),
+            rot: attr(xfrm, "rot")
+                .and_then(|s| s.parse().ok())
+                .map(|v: i64| v as f64 / 60000.0),
             flip: Some((
                 attr(xfrm, "flipH").is_some_and(|v| v == "1"),
                 attr(xfrm, "flipV").is_some_and(|v| v == "1"),
@@ -1491,7 +1586,9 @@ fn cnv_name(el: &XmlEl) -> Option<String> {
             .filter_map(|n| n.as_element())
             .find(|c| c.name.starts_with("nv") && c.name.ends_with("Pr"))
     })?;
-    first(nv, "cNvPr").and_then(|p| attr(p, "name")).map(str::to_string)
+    first(nv, "cNvPr")
+        .and_then(|p| attr(p, "name"))
+        .map(str::to_string)
 }
 
 /// `graphicFrame` → graphicData URI.
@@ -1530,7 +1627,11 @@ fn map_sp(
     }
     let ext = nv_pr
         .and_then(|p| first(p, "extLst"))
-        .and_then(|lst| children_in(lst, "ext").into_iter().find(|e| attr(e, "uri") == Some(PPTD_ICON_URI)))
+        .and_then(|lst| {
+            children_in(lst, "ext")
+                .into_iter()
+                .find(|e| attr(e, "uri") == Some(PPTD_ICON_URI))
+        })
         .and_then(|ext| first(ext, "icon"));
     let sp_pr = first(el, "spPr");
     let xfrm_el = sp_pr.and_then(|p| first(p, "xfrm"));
@@ -1543,9 +1644,8 @@ fn map_sp(
     // (colour/font/size) even when the slide carries its own `<a:xfrm>`:
     // geometry may be overridden per-slide while text styling still falls
     // back to the layout's `lstStyle` defRPr.
-    let inherited_proto: Option<PlaceholderProto> = ph.and_then(|ph_el| {
-        lookup_placeholder(&ctx.layout_placeholders, &ph_key(ph_el)).cloned()
-    });
+    let inherited_proto: Option<PlaceholderProto> =
+        ph.and_then(|ph_el| lookup_placeholder(&ctx.layout_placeholders, &ph_key(ph_el)).cloned());
     if let Some(proto) = &inherited_proto {
         inherited_defaults = Some(proto.defaults.clone());
     }
@@ -1627,9 +1727,7 @@ fn map_sp(
                         .and_then(|p| attr(p, "type"))
                         .is_some_and(|t| t == "title")
                     {
-                        ctx.defaults
-                            .title_line_spacing
-                            .or(ctx.master_line_spacing)
+                        ctx.defaults.title_line_spacing.or(ctx.master_line_spacing)
                     } else {
                         ctx.master_line_spacing
                     }
@@ -1693,9 +1791,9 @@ fn map_sp(
             // `<p:ph type>` so P3 can emit `<p:ph type=...>` and the layout
             // template in `layouts[key].placeholders[type]` is the inheritance
             // source. Non-placeholder text boxes carry `None`.
-            let placeholder = ph.as_ref().map(|p| {
-                attr(p, "type").unwrap_or("body").to_string()
-            });
+            let placeholder = ph
+                .as_ref()
+                .map(|p| attr(p, "type").unwrap_or("body").to_string());
             return Ok(Some(Element::Text(Text {
                 common: common(&x, id),
                 content,
@@ -1876,7 +1974,13 @@ fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
         .map(|v| v / 100000.0)
         .filter(|&v| (v - 1.0).abs() > 1e-6);
     let inner = if inner { Some(true) } else { None };
-    Some(Shadow { blur, color, offset, scale, inner })
+    Some(Shadow {
+        blur,
+        color,
+        offset,
+        scale,
+        inner,
+    })
 }
 
 fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
@@ -1887,12 +1991,17 @@ fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
             if first(ln, "noFill").is_some() {
                 return None;
             }
-            let width = attr(ln, "w").and_then(|s| s.parse::<i64>().ok()).map(|v| px(v as f64));
-            let style = first(ln, "prstDash").and_then(|d| attr(d, "val")).map(|v| match v {
-                "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot" | "sysDashDot" => LineStyle::Dash,
-                "dot" | "sysDot" => LineStyle::Dot,
-                _ => LineStyle::Solid,
-            });
+            let width = attr(ln, "w")
+                .and_then(|s| s.parse::<i64>().ok())
+                .map(|v| px(v as f64));
+            let style = first(ln, "prstDash")
+                .and_then(|d| attr(d, "val"))
+                .map(|v| match v {
+                    "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot"
+                    | "sysDashDot" => LineStyle::Dash,
+                    "dot" | "sysDot" => LineStyle::Dot,
+                    _ => LineStyle::Solid,
+                });
             // A gradient outline is captured verbatim; a solid colour
             // directly. A `<a:ln>` with neither a solidFill nor a gradFill is
             // still preserved as an empty line element (PowerPoint colourises
@@ -1901,9 +2010,17 @@ fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
             let gradient = first(ln, "gradFill")
                 .and_then(|g| gradient_from(g, slots))
                 .and_then(|f| match f {
-                    Fill::Gradient { gradient_type, stops, angle, scaled } => {
-                        Some(GradientFill { gradient_type, stops, angle, scaled })
-                    }
+                    Fill::Gradient {
+                        gradient_type,
+                        stops,
+                        angle,
+                        scaled,
+                    } => Some(GradientFill {
+                        gradient_type,
+                        stops,
+                        angle,
+                        scaled,
+                    }),
                     _ => None,
                 });
             let color = first(ln, "solidFill").and_then(|s| color_from_fill(s, slots));
@@ -1947,7 +2064,7 @@ fn ln_ref_border(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
     let width = match idx {
         "1" => 0.5,
         "2" => 1.0,
- "3" => 1.5,
+        "3" => 1.5,
         _ => 1.0,
     };
     color_from_fill(lr, slots).map(|c| Border {
@@ -2033,27 +2150,39 @@ impl GeomGuides {
         let value = match op {
             "val" => args.first().copied().flatten(),
             "*/" => {
-                let [Some(a), Some(b), Some(c)] = args.as_slice() else { return Err(format!("bad */ fmla `{fmla}`")); };
+                let [Some(a), Some(b), Some(c)] = args.as_slice() else {
+                    return Err(format!("bad */ fmla `{fmla}`"));
+                };
                 Some(a * b / c)
             }
             "+/" => {
-                let [Some(a), Some(b), Some(c)] = args.as_slice() else { return Err(format!("bad +/ fmla `{fmla}`")); };
+                let [Some(a), Some(b), Some(c)] = args.as_slice() else {
+                    return Err(format!("bad +/ fmla `{fmla}`"));
+                };
                 Some((a + b) / c)
             }
             "+-" => {
-                let [Some(a), Some(b), Some(c)] = args.as_slice() else { return Err(format!("bad +- fmla `{fmla}`")); };
+                let [Some(a), Some(b), Some(c)] = args.as_slice() else {
+                    return Err(format!("bad +- fmla `{fmla}`"));
+                };
                 Some(a + b - c)
             }
             "--" => {
-                let [Some(a), Some(b), Some(c)] = args.as_slice() else { return Err(format!("bad -- fmla `{fmla}`")); };
+                let [Some(a), Some(b), Some(c)] = args.as_slice() else {
+                    return Err(format!("bad -- fmla `{fmla}`"));
+                };
                 Some(a - b - c)
             }
             "min" => {
-                let [Some(a), Some(b)] = args.as_slice() else { return Err(format!("bad min fmla `{fmla}`")); };
+                let [Some(a), Some(b)] = args.as_slice() else {
+                    return Err(format!("bad min fmla `{fmla}`"));
+                };
                 Some(a.min(*b))
             }
             "max" => {
-                let [Some(a), Some(b)] = args.as_slice() else { return Err(format!("bad max fmla `{fmla}`")); };
+                let [Some(a), Some(b)] = args.as_slice() else {
+                    return Err(format!("bad max fmla `{fmla}`"));
+                };
                 Some(a.max(*b))
             }
             "abs" => args.first().copied().flatten().map(f64::abs),
@@ -2061,7 +2190,9 @@ impl GeomGuides {
             "sin" | "cos" | "tan" => {
                 // `sin ang hd2 y` → sin(ang) * hd2 + y, ang in 60000ths of a
                 // degree.
-                let [Some(a), Some(b), Some(c)] = args.as_slice() else { return Err(format!("bad {op} fmla `{fmla}`")); };
+                let [Some(a), Some(b), Some(c)] = args.as_slice() else {
+                    return Err(format!("bad {op} fmla `{fmla}`"));
+                };
                 let rad = a.to_radians();
                 let f = match op {
                     "sin" => rad.sin(),
@@ -2072,7 +2203,9 @@ impl GeomGuides {
             }
             "cat2" => {
                 // atan2(y, x) in 60000ths of a degree.
-                let [Some(y), Some(x)] = args.as_slice() else { return Err(format!("bad cat2 fmla `{fmla}`")); };
+                let [Some(y), Some(x)] = args.as_slice() else {
+                    return Err(format!("bad cat2 fmla `{fmla}`"));
+                };
                 Some(y.atan2(*x).to_degrees() * 60000.0)
             }
             _ => return Err(format!("unsupported guide operator `{op}` in `{fmla}`")),
@@ -2113,8 +2246,16 @@ fn custom_shape(
         None => {
             // Fall back to the first path's coordinate space.
             let p = first(path_lst, "path").ok_or("custGeom without a:path")?;
-            let w = p.attributes.get("w").and_then(|s| s.parse::<f64>().ok()).unwrap_or(100.0);
-            let h = p.attributes.get("h").and_then(|s| s.parse::<f64>().ok()).unwrap_or(100.0);
+            let w = p
+                .attributes
+                .get("w")
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(100.0);
+            let h = p
+                .attributes
+                .get("h")
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(100.0);
             (0.0, 0.0, w, h)
         }
     };
@@ -2136,7 +2277,10 @@ fn custom_shape(
             }
         }
     }
-    for gd in first(geom, "gdLst").into_iter().flat_map(|lst| lst.children.iter().filter_map(|n| n.as_element())) {
+    for gd in first(geom, "gdLst")
+        .into_iter()
+        .flat_map(|lst| lst.children.iter().filter_map(|n| n.as_element()))
+    {
         if gd.name == "gd" {
             let gname = attr(gd, "name").unwrap_or("").to_string();
             let fmla = attr(gd, "fmla").unwrap_or("");
@@ -2161,8 +2305,16 @@ fn custom_shape(
     let mut d_parts: Vec<String> = Vec::new();
     let mut view_box: Option<(f64, f64)> = None;
     for p in children_in(path_lst, "path") {
-        let w = p.attributes.get("w").and_then(|s| s.parse::<f64>().ok()).unwrap_or(rect.2 - rect.0);
-        let h = p.attributes.get("h").and_then(|s| s.parse::<f64>().ok()).unwrap_or(rect.3 - rect.1);
+        let w = p
+            .attributes
+            .get("w")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(rect.2 - rect.0);
+        let h = p
+            .attributes
+            .get("h")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(rect.3 - rect.1);
         view_box = Some((w, h));
         let mut d = String::new();
         for seg in p.children.iter().filter_map(|n| n.as_element()) {
@@ -2196,7 +2348,12 @@ fn custom_shape(
                     if pts.len() == 3 {
                         d.push_str(&format!(
                             "C {} {} {} {} {} {}",
-                            rnd(pts[0].0), rnd(pts[0].1), rnd(pts[1].0), rnd(pts[1].1), rnd(pts[2].0), rnd(pts[2].1)
+                            rnd(pts[0].0),
+                            rnd(pts[0].1),
+                            rnd(pts[1].0),
+                            rnd(pts[1].1),
+                            rnd(pts[2].0),
+                            rnd(pts[2].1)
                         ));
                     }
                 }
@@ -2208,7 +2365,13 @@ fn custom_shape(
                         .filter_map(pt_opt)
                         .collect::<Vec<_>>();
                     if pts.len() == 2 {
-                        d.push_str(&format!("Q {} {} {} {}", rnd(pts[0].0), rnd(pts[0].1), rnd(pts[1].0), rnd(pts[1].1)));
+                        d.push_str(&format!(
+                            "Q {} {} {} {}",
+                            rnd(pts[0].0),
+                            rnd(pts[0].1),
+                            rnd(pts[1].0),
+                            rnd(pts[1].1)
+                        ));
                     }
                 }
                 "close" => d.push('Z'),
@@ -2241,11 +2404,19 @@ fn rnd(v: f64) -> i64 {
 fn pt(el: &XmlEl, guides: &GeomGuides) -> std::result::Result<(f64, f64), String> {
     let x_raw = attr(el, "x").map(str::to_string);
     let y_raw = attr(el, "y").map(str::to_string);
-    let gx = x_raw.as_deref().and_then(|s| s.parse::<f64>().ok()).or_else(|| guides.get(x_raw.as_deref()?));
-    let gy = y_raw.as_deref().and_then(|s| s.parse::<f64>().ok()).or_else(|| guides.get(y_raw.as_deref()?));
+    let gx = x_raw
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| guides.get(x_raw.as_deref()?));
+    let gy = y_raw
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| guides.get(y_raw.as_deref()?));
     match (gx, gy) {
         (Some(x), Some(y)) => Ok((x, y)),
-        _ => Err(format!("path point references an unknown guide (x={x_raw:?} y={y_raw:?})")),
+        _ => Err(format!(
+            "path point references an unknown guide (x={x_raw:?} y={y_raw:?})"
+        )),
     }
 }
 
@@ -2272,13 +2443,18 @@ fn map_pic(
         Some(target) => {
             let ext = target.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
             if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-                ctx.skip(&name, format!("media extension .{ext} is not supported by the builder"));
+                ctx.skip(
+                    &name,
+                    format!("media extension .{ext} is not supported by the builder"),
+                );
                 return None;
             }
             let basename = target.rsplit('/').next().unwrap_or(target).to_string();
             // `rels` already holds resolved archive paths (`ppt/media/imageN.png`).
             let part = target.clone();
-            ctx.media.entry(part.clone()).or_insert_with(|| basename.clone());
+            ctx.media
+                .entry(part.clone())
+                .or_insert_with(|| basename.clone());
             (format!("media/{basename}"), part)
         }
         None => {
@@ -2323,18 +2499,35 @@ fn map_pic(
 }
 
 /// Map `a:srcRect` ppm values to PPTD fit/crop.
-fn src_rect_fit(blip_fill: Option<&XmlEl>, _ctx: &mut PageCtx<'_>) -> (Option<ImageFit>, Option<crate::pptd::shared::ImageCrop>) {
+fn src_rect_fit(
+    blip_fill: Option<&XmlEl>,
+    _ctx: &mut PageCtx<'_>,
+) -> (Option<ImageFit>, Option<crate::pptd::shared::ImageCrop>) {
     let Some(rect) = blip_fill.and_then(|b| first(b, "srcRect")) else {
         // Office stretches pictures by default; PPTD default would crop.
-        return (Some(ImageFit { mode: ImageFitMode::Fill }), None);
+        return (
+            Some(ImageFit {
+                mode: ImageFitMode::Fill,
+            }),
+            None,
+        );
     };
-    let v = |k: &str| attr(rect, k).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let v = |k: &str| {
+        attr(rect, k)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
     let (l, t, r, b) = (v("l"), v("t"), v("r"), v("b"));
     let f = |n: f64| n / 100000.0;
     if l != 0.0 || t != 0.0 || r != 0.0 || b != 0.0 {
         if (t < 0.0 || b < 0.0) && !(l > 0.0 || r > 0.0) {
             // Negative crops pad the slack axis → contain.
-            (Some(ImageFit { mode: ImageFitMode::Contain }), None)
+            (
+                Some(ImageFit {
+                    mode: ImageFitMode::Contain,
+                }),
+                None,
+            )
         } else {
             // Positive crops clip the source image; stretchen into the box
             // (Fill) with the explicit fractions reproduces the srcRect
@@ -2345,10 +2538,20 @@ fn src_rect_fit(blip_fill: Option<&XmlEl>, _ctx: &mut PageCtx<'_>) -> (Option<Im
                 right: Some(f(r)),
                 bottom: Some(f(b)),
             });
-            (Some(ImageFit { mode: ImageFitMode::Fill }), crop)
+            (
+                Some(ImageFit {
+                    mode: ImageFitMode::Fill,
+                }),
+                crop,
+            )
         }
     } else {
-        (Some(ImageFit { mode: ImageFitMode::Fill }), None)
+        (
+            Some(ImageFit {
+                mode: ImageFitMode::Fill,
+            }),
+            None,
+        )
     }
 }
 
@@ -2558,7 +2761,10 @@ fn color_rgb(el: &XmlEl, _slots: &SlotColors) -> Option<String> {
 }
 
 fn alpha_of(el: &XmlEl) -> Option<f64> {
-    first(el, "alpha").and_then(|a| attr(a, "val")).and_then(|s| s.parse::<f64>().ok()).map(|v| v / 100000.0)
+    first(el, "alpha")
+        .and_then(|a| attr(a, "val"))
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v / 100000.0)
 }
 
 fn col(rgb: &str, alpha: Option<f64>) -> Color {
@@ -2575,19 +2781,31 @@ fn col(rgb: &str, alpha: Option<f64>) -> Color {
 
 fn gradient_from(grad: &XmlEl, slots: &SlotColors) -> Option<Fill> {
     let mut stops = Vec::new();
-    for gs in first(grad, "gsLst")?.children.iter().filter_map(|n| n.as_element()) {
+    for gs in first(grad, "gsLst")?
+        .children
+        .iter()
+        .filter_map(|n| n.as_element())
+    {
         if gs.name != "gs" {
             continue;
         }
-        let pos = attr(gs, "pos").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) / 100000.0;
+        let pos = attr(gs, "pos")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+            / 100000.0;
         let color = color_from_fill(gs, slots)?;
-        stops.push(crate::pptd::shared::ColorStop { position: pos, color });
+        stops.push(crate::pptd::shared::ColorStop {
+            position: pos,
+            color,
+        });
     }
     if stops.is_empty() {
         return None;
     }
     if let Some(lin) = first(grad, "lin") {
-        let angle = attr(lin, "ang").and_then(|s| s.parse::<f64>().ok()).map(|a| a / 60000.0);
+        let angle = attr(lin, "ang")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|a| a / 60000.0);
         let scaled = attr(lin, "scaled").map_or(false, |v| v == "1");
         Some(Fill::Gradient {
             gradient_type: GradientType::Linear,
@@ -2638,9 +2856,7 @@ fn text_content(
         "b" => VerticalAlign::Bottom,
         _ => VerticalAlign::Top,
     });
-    let wrap = body_pr
-        .and_then(|b| attr(b, "wrap"))
-        .map(|w| w != "none");
+    let wrap = body_pr.and_then(|b| attr(b, "wrap")).map(|w| w != "none");
     let text_direction = body_pr.and_then(|b| attr(b, "vert")).and_then(|v| match v {
         "eaVert" | "vert" | "vert270" => Some(TextDirection::Vertical),
         // `horz` is the default (and previously a bug turned it into
@@ -2665,18 +2881,20 @@ fn text_content(
     // `forceAA`, `compatLnSpc`, …). These tweak PowerPoint/WPS text layout
     // (most notably the vertical text position inside an anchored box), and
     // dropping them made rebuilds align differently in those renderers.
-    let body_pr_extras = body_pr.map(|b| {
-        b.attributes
-            .iter()
-            .filter(|(k, _)| {
-                !matches!(
-                    k.as_str(),
-                    "lIns" | "tIns" | "rIns" | "bIns" | "wrap" | "rtlCol" | "anchor" | "vert"
-                )
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<BTreeMap<_, _>>()
-    }).filter(|m| !m.is_empty());
+    let body_pr_extras = body_pr
+        .map(|b| {
+            b.attributes
+                .iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "lIns" | "tIns" | "rIns" | "bIns" | "wrap" | "rtlCol" | "anchor" | "vert"
+                    )
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .filter(|m| !m.is_empty());
     // Text insets: OOXML defaults when the attribute is absent are
     // lIns/rIns = 91440 EMU (7.2px) and tIns/bIns = 45720 EMU (3.6px).
     // Using 7.2 for all pushed text ~3.6px too low on boxes with an
@@ -2758,15 +2976,13 @@ fn text_content(
                 d
             })
             .unwrap_or_else(|| ctx.defaults.clone());
-        let algn = p_pr
-            .and_then(|pp| attr(pp, "algn"))
-            .map(|a| match a {
-                "ctr" => HorizontalAlign::Center,
-                "r" => HorizontalAlign::Right,
-                "just" => HorizontalAlign::Justify,
-                "dist" => HorizontalAlign::Distributed,
-                _ => HorizontalAlign::Left,
-            });
+        let algn = p_pr.and_then(|pp| attr(pp, "algn")).map(|a| match a {
+            "ctr" => HorizontalAlign::Center,
+            "r" => HorizontalAlign::Right,
+            "just" => HorizontalAlign::Justify,
+            "dist" => HorizontalAlign::Distributed,
+            _ => HorizontalAlign::Left,
+        });
         let ln = p_pr
             .and_then(|pp| first(pp, "lnSpc"))
             .and_then(|ls| first(ls, "spcPct"))
@@ -2793,12 +3009,8 @@ fn text_content(
                         .and_then(|t| t.get_text())
                         .map(|c| c.to_string())
                         .unwrap_or_default();
-                    let st = RunStyle::from_rpr(
-                        first(child, "rPr"),
-                        slots,
-                        &para_defaults,
-                        &ctx.fonts,
-                    );
+                    let st =
+                        RunStyle::from_rpr(first(child, "rPr"), slots, &para_defaults, &ctx.fonts);
                     runs.push((st, t));
                 }
                 "br" => runs.push((None, "\n".into())),
@@ -2906,7 +3118,8 @@ fn text_content(
                 if let Some(c) = st.as_ref().and_then(|s| s.color.clone()) {
                     span_style.push(format!("color:{}", c.0));
                 }
-                if let Some(FontFamily::Single(n)) = st.as_ref().and_then(|s| s.font_family.clone()) {
+                if let Some(FontFamily::Single(n)) = st.as_ref().and_then(|s| s.font_family.clone())
+                {
                     span_style.push(format!("font-family:{n}"));
                 }
                 if st.as_ref().and_then(|s| s.bold) != run_style.as_ref().and_then(|s| s.bold) {
@@ -2931,10 +3144,7 @@ fn text_content(
                 }
                 let mut inner = escape_text(t);
                 if !span_style.is_empty() {
-                    inner = format!(
-                        "<span style=\"{}\">{inner}</span>",
-                        span_style.join("; ")
-                    );
+                    inner = format!("<span style=\"{}\">{inner}</span>", span_style.join("; "));
                 }
                 if st.as_ref().is_some_and(|s| s.italic == Some(true)) {
                     inner = format!("<em>{inner}</em>");
@@ -3020,8 +3230,12 @@ impl RunStyle {
         // instead of the master's 28pt + tx1.
         let explicit_sz = attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok());
         let explicit_fill = color_from_fill(rpr, slots);
-        let explicit_bold = attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
-        let explicit_italic = attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0);
+        let explicit_bold = attr(rpr, "b")
+            .and_then(|s| s.parse::<u8>().ok())
+            .map(|v| v != 0);
+        let explicit_italic = attr(rpr, "i")
+            .and_then(|s| s.parse::<u8>().ok())
+            .map(|v| v != 0);
 
         let font_size = explicit_sz.map(|s| s / 100.0).or(defaults.sz);
         let color = explicit_fill.or_else(|| defaults.color.clone());
@@ -3054,16 +3268,14 @@ impl RunStyle {
 // ---------------------------------------------------------------------------
 
 fn parse_part(zip: &mut zip::ZipArchive<fs::File>, part: &str) -> Result<XmlEl> {
-    let mut reader = zip.by_name(part).map_err(|e| {
-        Error::Invalid(format!("part {part} missing in package: {e}"))
-    })?;
+    let mut reader = zip
+        .by_name(part)
+        .map_err(|e| Error::Invalid(format!("part {part} missing in package: {e}")))?;
     let mut data = Vec::new();
     reader
         .read_to_end(&mut data)
         .map_err(|e| Error::Invalid(format!("read part {part}: {e}")))?;
-    XmlEl::parse(data.as_slice()).map_err(|e| {
-        Error::Invalid(format!("parse XML in {part}: {e}"))
-    })
+    XmlEl::parse(data.as_slice()).map_err(|e| Error::Invalid(format!("parse XML in {part}: {e}")))
 }
 
 fn children<'a>(el: &'a XmlEl, name: &str) -> Vec<&'a XmlEl> {
@@ -3149,7 +3361,9 @@ mod tests {
 
     #[test]
     fn explicit_attrs_win_over_defaults() {
-        let rpr = parse(r#"<rPr sz="4000" b="1"><solidFill><srgbClr val="0D37D4"/></solidFill><latin typeface="微软雅黑"/></rPr>"#);
+        let rpr = parse(
+            r#"<rPr sz="4000" b="1"><solidFill><srgbClr val="0D37D4"/></solidFill><latin typeface="微软雅黑"/></rPr>"#,
+        );
         let st = RunStyle::from_rpr(Some(&rpr), &SlotColors::new(), &defaults(), &fonts())
             .expect("rPr must yield a style");
         assert_eq!(st.font_size, Some(40.0));
@@ -3198,14 +3412,21 @@ mod tests {
         let path = std::env::temp_dir().join("slideforge-master-defaults-test.pptx");
         use std::io::Write as _;
         let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
-        w.start_file("ppt/slideMasters/slideMaster1.xml", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        w.start_file(
+            "ppt/slideMasters/slideMaster1.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         w.write_all(master_xml.as_bytes()).unwrap();
         w.finish().unwrap();
         // p:sldMaster -> path ppt/slideMasters/slideMaster1.xml
         let file = std::fs::File::open(&path).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
-        let d = master_defaults(&mut archive, "ppt/slideMasters/slideMaster1.xml", &SlotColors::new());
+        let d = master_defaults(
+            &mut archive,
+            "ppt/slideMasters/slideMaster1.xml",
+            &SlotColors::new(),
+        );
         let _ = std::fs::remove_file(&path);
         assert_eq!(d.sz, Some(18.0), "otherStyle defRPr sz=1800 → 18pt");
         assert_eq!(
@@ -3238,7 +3459,8 @@ mod tests {
 <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr>
 <p:txBody><a:bodyPr/></p:txBody></p:sp>"#,
         );
-        let proto2 = placeholder_proto(&el2, &SlotColors::new()).expect("constant placeholder proto");
+        let proto2 =
+            placeholder_proto(&el2, &SlotColors::new()).expect("constant placeholder proto");
         assert_eq!(proto2.anchor, None);
     }
 }

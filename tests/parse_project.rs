@@ -199,7 +199,9 @@ fn flags_dangling_layout_reference() {
     };
     let diags = validate_project(&project);
     assert!(
-        diags.iter().any(|d| d.message.contains("not defined in presentation.layouts")),
+        diags
+            .iter()
+            .any(|d| d.message.contains("not defined in presentation.layouts")),
         "expected dangling-layout diagnostic, got {diags:?}"
     );
 }

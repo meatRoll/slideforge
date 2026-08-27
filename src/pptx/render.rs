@@ -7,11 +7,11 @@
 //! `<p:grpSp>` group reconstruction (SlideForge group extension) are
 //! supported.
 
+use crate::pptd::elements::{GroupDef, GroupXfrm};
 use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientType, HorizontalAlign,
     ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
-use crate::pptd::elements::{GroupDef, GroupXfrm};
 use crate::pptd::{
     Element, Icon, Image, Line, LineCurve, Shape, Text, TextAutofit, TextContent, TextDirection,
     Theme,
@@ -170,7 +170,9 @@ fn render_group(
             Some(child_gid) => {
                 // Nested group (child_gid's parent is this group).
                 let nested_end = group_span_end(elements, groups, i, child_gid);
-                render_group(xml, ctx, elements, groups, i, nested_end, child_gid, page_index)?;
+                render_group(
+                    xml, ctx, elements, groups, i, nested_end, child_gid, page_index,
+                )?;
                 i = nested_end;
             }
             None => {
@@ -193,12 +195,21 @@ fn group_xfrm(xml: &mut Xml, x: &GroupXfrm) {
     let cho_y = emu(x.ch_off.1).to_string();
     let che_cx = emu(x.ch_ext.0).to_string();
     let che_cy = emu(x.ch_ext.1).to_string();
-    let rot = x.rot.filter(|d| d.abs() > 1e-9).map(|d| ((d * 60000.0).round()).to_string());
+    let rot = x
+        .rot
+        .filter(|d| d.abs() > 1e-9)
+        .map(|d| ((d * 60000.0).round()).to_string());
     let (fh, fv) = x.flip.unwrap_or((false, false));
     let mut attrs: Vec<(&str, &str)> = Vec::new();
-    if let Some(r) = rot.as_deref() { attrs.push(("rot", r)); }
-    if fh { attrs.push(("flipH", "1")); }
-    if fv { attrs.push(("flipV", "1")); }
+    if let Some(r) = rot.as_deref() {
+        attrs.push(("rot", r));
+    }
+    if fh {
+        attrs.push(("flipH", "1"));
+    }
+    if fv {
+        attrs.push(("flipV", "1"));
+    }
     xml.start("a:xfrm", &attrs);
     xml.leaf("a:off", &[("x", &off_x), ("y", &off_y)]);
     xml.leaf("a:ext", &[("cx", &ext_cx), ("cy", &ext_cy)]);
@@ -376,7 +387,11 @@ fn shadow_xml(xml: &mut Xml, theme: Option<&Theme>, shadow: &Shadow) -> Result<(
         attrs.push(("sy", scale_s.as_str()));
         attrs.push(("algn", "ctr"));
     }
-    let tag = if shadow.inner.unwrap_or(false) { "a:innerShdw" } else { "a:outerShdw" };
+    let tag = if shadow.inner.unwrap_or(false) {
+        "a:innerShdw"
+    } else {
+        "a:outerShdw"
+    };
     xml.start(tag, &attrs);
     srgb(xml, &resolved.rgb, resolved.alpha);
     xml.end(tag);
@@ -421,7 +436,10 @@ pub fn fill_xml(
             match gradient_type {
                 GradientType::Linear => {
                     let angle = (angle.unwrap_or(0.0) * 60000.0).round().to_string();
-                    xml.start("a:lin", &[("ang", &angle), ("scaled", if *scaled { "1" } else { "0" })]);
+                    xml.start(
+                        "a:lin",
+                        &[("ang", &angle), ("scaled", if *scaled { "1" } else { "0" })],
+                    );
                     xml.end("a:lin");
                 }
                 GradientType::Radial => {
@@ -536,7 +554,9 @@ pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> Eff
         align: content.align,
         wrap: content.wrap,
         direction: content.text_direction,
-        margin_top: content.margin_top.or_else(|| base.and_then(|b| b.margin_top)),
+        margin_top: content
+            .margin_top
+            .or_else(|| base.and_then(|b| b.margin_top)),
         margin_left: content.margin_left,
         margin_right: content.margin_right,
         margin_bottom: content.margin_bottom,
@@ -688,7 +708,10 @@ fn render_text(
             bpr_v.push(v.clone());
         }
     }
-    let bpr_attrs: Vec<(&str, &str)> = bpr_k.into_iter().zip(bpr_v.iter().map(String::as_str)).collect();
+    let bpr_attrs: Vec<(&str, &str)> = bpr_k
+        .into_iter()
+        .zip(bpr_v.iter().map(String::as_str))
+        .collect();
     xml.start("a:bodyPr", &bpr_attrs);
     match style.autofit {
         Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
@@ -805,7 +828,11 @@ fn css_align(value: &str) -> Option<&'static str> {
 
 /// Decode the five XML entities used by rich text.
 fn unescape_xml(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Parse PPTD rich text into paragraphs with per-paragraph and per-run
@@ -868,11 +895,11 @@ fn parse_rich(text: &str) -> Vec<RichPara> {
                 v.parse::<f64>().ok()
             }
         });
-        let line_height_px = css_value(&pairs, "line-height").and_then(css_px).filter(|_| css_value(&pairs, "line-height").is_some_and(|v| v.contains("px")));
+        let line_height_px = css_value(&pairs, "line-height")
+            .and_then(css_px)
+            .filter(|_| css_value(&pairs, "line-height").is_some_and(|v| v.contains("px")));
         let margin_top_px = css_value(&pairs, "margin-top").and_then(css_px);
-        let close_rel = text[gt + 1..]
-            .find("</p>")
-            .unwrap_or(text[gt + 1..].len());
+        let close_rel = text[gt + 1..].find("</p>").unwrap_or(text[gt + 1..].len());
         let close = gt + 1 + close_rel;
         paras.push(RichPara {
             align,
@@ -934,7 +961,8 @@ fn parse_runs(inner: &str) -> Vec<RichRun> {
         let tag = &rest[lt..];
         if let Some(end) = tag.find('>') {
             let name = tag[1..end].trim();
-            if let Some(style) = name.strip_prefix("span style=\"")
+            if let Some(style) = name
+                .strip_prefix("span style=\"")
                 .and_then(|s| s.strip_suffix('\"'))
             {
                 flush(&mut out, &mut buf, &flags);
@@ -942,9 +970,8 @@ fn parse_runs(inner: &str) -> Vec<RichRun> {
                 flags.size = css_value(&pairs, "font-size").and_then(css_px);
                 flags.color = css_value(&pairs, "color").map(str::to_string);
                 flags.family = css_value(&pairs, "font-family").map(str::to_string);
-                flags.bold = css_value(&pairs, "font-weight").map(|w| {
-                    matches!(w, "bold" | "bolder" | "600" | "700" | "800" | "900")
-                });
+                flags.bold = css_value(&pairs, "font-weight")
+                    .map(|w| matches!(w, "bold" | "bolder" | "600" | "700" | "800" | "900"));
                 flags.italic = css_value(&pairs, "font-style").map(|s| s != "normal");
                 flags.styled = flags.size.is_some()
                     || flags.color.is_some()
@@ -1036,7 +1063,10 @@ fn render_rich_body(
             bpr_v.push(v.clone());
         }
     }
-    let bpr_attrs: Vec<(&str, &str)> = bpr_k.into_iter().zip(bpr_v.iter().map(String::as_str)).collect();
+    let bpr_attrs: Vec<(&str, &str)> = bpr_k
+        .into_iter()
+        .zip(bpr_v.iter().map(String::as_str))
+        .collect();
     xml.start("a:bodyPr", &bpr_attrs);
     match style.autofit {
         Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
@@ -1052,16 +1082,15 @@ fn render_rich_body(
         let algn = para
             .align
             .or_else(|| {
-                style
-                    .align
-                    .map(|a| a.horizontal)
-                    .and_then(|h| css_align(match h {
+                style.align.map(|a| a.horizontal).and_then(|h| {
+                    css_align(match h {
                         HorizontalAlign::Left => "left",
                         HorizontalAlign::Center => "center",
                         HorizontalAlign::Right => "right",
                         HorizontalAlign::Justify => "justify",
                         HorizontalAlign::Distributed => "distributed",
-                    }))
+                    })
+                })
             })
             .unwrap_or("l");
         let line_height_pct = para
@@ -1112,7 +1141,10 @@ fn render_rich_body(
                 .or(style.font_size)
                 .unwrap_or(18.0);
             let sz = ((sz * 100.0).round() as u64).to_string();
-            xml.leaf("a:endParaRPr", &[("lang", "en-US"), ("sz", &sz), ("noProof", "1")]);
+            xml.leaf(
+                "a:endParaRPr",
+                &[("lang", "en-US"), ("sz", &sz), ("noProof", "1")],
+            );
         }
         xml.end("a:p");
     }
@@ -1154,10 +1186,7 @@ fn emit_run_styled(
     text: &str,
 ) {
     let run = run.filter(|r| r.styled);
-    let font_size = run
-        .and_then(|r| r.size)
-        .or(style.font_size)
-        .unwrap_or(18.0);
+    let font_size = run.and_then(|r| r.size).or(style.font_size).unwrap_or(18.0);
     let font_family = run
         .and_then(|r| r.family.as_deref())
         .map(|f| FontFamily::Single(f.to_owned()))
@@ -1169,7 +1198,9 @@ fn emit_run_styled(
         .or_else(|| style.color.clone())
         .unwrap_or(Color("#000000".to_owned()));
     let bold = run.and_then(|r| r.bold).unwrap_or(style.bold == Some(true));
-    let italic = run.and_then(|r| r.italic).unwrap_or(style.italic == Some(true));
+    let italic = run
+        .and_then(|r| r.italic)
+        .unwrap_or(style.italic == Some(true));
 
     let sz = (font_size * 100.0).round().to_string();
     let mut attrs: Vec<(&str, &str)> = vec![("lang", "en-US"), ("sz", &sz), ("noProof", "1")];
