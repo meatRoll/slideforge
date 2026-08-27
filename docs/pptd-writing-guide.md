@@ -4,10 +4,12 @@
 > [SlideForge](../README.md) 这个本地编译器独立产出一个**可校验、可编译成
 > 可编辑 PPTX** 的 PPTD 项目。
 >
-> 本指南以本仓库（`slideforge`，Rust 实现的 PPTD→PPTX 编译引擎）为操作骨干，
-> 规范语义参考 Moonshot 的 PPTD v2 格式定义。两者底层 DSL 一致；本仓库在
-> 「可编程、可测试、纯本地编译、反向解析」这条线上更完整，而 Moonshot 的
-> 参考资料在「形状库 / 字体库 / 设计系统 / 场景分类」上更完整，写作时互补。
+> 本指南以本仓库（`slideforge`，Rust 实现的 PPTD→PPTX 编译引擎）为操作骨干。
+> **规范语义**见 [`docs/pptd-spec.md`](./pptd-spec.md)（Moonshot PPTD v2 的本仓库只读镜像）；
+> **SlideForge 的 layouts 扩展**见 [`docs/pptd-layout-extension.md`](./pptd-layout-extension.md)
+> （`Presentation.layouts` / `Page.layout` / `Text.placeholder`，可选、向后兼容）。
+> 两份文档是 AI 编辑 PPTD 时的权威参考。Moonshot 的参考资料在「形状库 / 字体库 /
+> 设计系统 / 场景分类」上更完整，写作时互补。
 
 ---
 
