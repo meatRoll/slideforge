@@ -1020,14 +1020,10 @@ fn flatten_group(
     in_layout: bool,
     out: &mut Vec<Option<Element>>,
 ) -> Result<()> {
-    let Some(grel) = first(el, "grpSpPr").and_then(|p| first(p, "xfrm")) else {
-        return Ok(());
-    };
-    let raw = Xform::parse(grel);
-    let g = raw.apply(outer);
-    // The group's own fill (from `<p:grpSpPr>`). A child using `<a:grpFill>`
-    // inherits this — resolve it onto the member so the PPTD (flat model,
-    // no group-fill concept) carries a concrete fill.
+    // The group's own fill (from `<p:grpSpPr>`, parsed first — a no-xfrm
+    // group may still carry a fill its grpFill children inherit). A child
+    // using `<a:grpFill>` inherits this; resolve it onto the member so the
+    // PPTD (flat model, no group-fill concept) carries a concrete fill.
     let group_fill: Option<Fill> = first(el, "grpSpPr").and_then(|gpr| {
         if first(gpr, "noFill").is_some() {
             return None;
@@ -1043,25 +1039,62 @@ fn flatten_group(
         }
         None
     });
-    // Classify the group. WPS emits three flavours:
-    //  - shrinking/zero-size (own `ext` ~0 or `ext`/`chExt` ~0): renders
-    //    nothing → skip (composing would fabricate phantom children).
+    let Some(grel) = first(el, "grpSpPr").and_then(|p| first(p, "xfrm")) else {
+        // No `<a:xfrm>` → passthrough: this group adds no transform. Walk its
+        // children with the outer transform + parent_id unchanged so members
+        // join the enclosing group (or stay top-level if there is none).
+        // WPS emits such header groups inside enlarging card groups; without
+        // this passthrough their Freeform+TextBox banner would be dropped.
+        for child in el.children.iter().filter_map(|n| n.as_element()) {
+            match child.name.as_str() {
+                "nvGrpSpPr" | "grpSpPr" => continue,
+                "grpSp" => {
+                    flatten_group(child, rels, ctx, outer, parent_id, group_fill.as_ref(), in_layout, out)?;
+                }
+                _ => {
+                    let before = out.len();
+                    walk_sp_tree_child(child, rels, ctx, outer, parent_id, in_layout, out)?;
+                    for slot in &mut out[before..] {
+                        if let Some(elem) = slot {
+                            if let Some(parent) = parent_id {
+                                elem.common_mut().group_id = Some(parent.to_owned());
+                                if let Some(sp_pr) = first(child, "spPr") {
+                                    if let Some(xel) = first(sp_pr, "xfrm") {
+                                        elem.common_mut().group_bounds =
+                                        Some(to_bounds(&Xform::parse(xel)));
+                                    }
+                                }
+                            }
+                            if let Some(sp_pr) = first(child, "spPr") {
+                                if first(sp_pr, "grpFill").is_some() {
+                                    if let Element::Shape(shape) = elem {
+                                        if shape.fill.is_none() {
+                                            shape.fill = group_fill.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    };
+    let raw = Xform::parse(grel);
+    let g = raw.apply(outer);
+    // Classify the group. WPS emits two flavours worth distinguishing:
     //  - enlarging stub (`chExt` sub-pixel, `ext` normal): an artifact whose
     //    children are tiny stubs scaled up to full size. PRESERVE as a real
     //    `<p:grpSp>` so WPS's group selection box matches the source.
-    //  - normal (`chExt` ~ `ext`): FLATTEN — children render fine on their
-    //    own; keeping them grouped breaks grouped-custGeom rendering in
-    //    QuickLook/WPS (e.g. card header banners vanish).
+    //  - everything else (normal groups AND shrinking/zero-size groups):
+    //    FLATTEN. A top-level shrinking group composes to ~0-size children
+    //    (invisible, matching the source); a shrinking group nested inside an
+    //    enlarging stub composes to full-size children (e.g. the card header
+    //    banner + title). Keeping these grouped breaks grouped-custGeom
+    //    rendering in QuickLook/WPS, so flatten always.
     let ext_sub = raw.ext.0.abs() < 12700.0 && raw.ext.1.abs() < 12700.0;
     let ch_sub = raw.ch_ext.0.abs() < 12700.0 && raw.ch_ext.1.abs() < 12700.0;
-    let shrinking = ext_sub
-        || (raw.ch_ext.0.abs() > 1e-3
-            && raw.ch_ext.1.abs() > 1e-3
-            && raw.ext.0 / raw.ch_ext.0 < 0.01
-            && raw.ext.1 / raw.ch_ext.1 < 0.01);
-    if shrinking {
-        return Ok(());
-    }
     let enlarging_stub = ch_sub && !ext_sub;
     if enlarging_stub {
         // PRESERVE: register the group + tag members (verbatim child-space
