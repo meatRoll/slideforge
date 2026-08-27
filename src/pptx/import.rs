@@ -22,7 +22,7 @@
 //! the writer's px↔EMU mapping (`12700` EMU per px), so rebuilding a converted
 //! project reproduces the original XML coordinates to the EMU.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -34,6 +34,7 @@ use crate::pptd::elements::{
     Element, ElementCommon, Icon, Image, Line, Shape, Text, TextAutofit, TextContent,
     TextDirection,
 };
+use crate::pptd::layout::{LayoutDef, PlaceholderDef};
 use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientFill, GradientType,
     HorizontalAlign, ImageCrop, ImageFit, ImageFitMode, LineStyle, VerticalAlign,
@@ -137,22 +138,70 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
     let mut pages = Vec::with_capacity(slide_parts.len());
     let mut skipped = Vec::new();
     let mut element_count = 0usize;
+    // SlideForge layout extension: one `LayoutDef` per distinct source
+    // layout, shared by every slide that references it. Decorative shapes,
+    // background and placeholder templates live here instead of being
+    // flattened onto each slide.
+    let mut layouts: HashMap<String, LayoutDef> = HashMap::new();
+    let mut layout_cache: HashMap<String, LayoutBuild> = HashMap::new();
 
     for (idx, part) in slide_parts.iter().enumerate() {
         let page_no = idx + 1;
         let slide = parse_part(&mut zip, part)?;
+        let (rels, layout_part) = parse_slide_rels(&mut zip, part);
+        let master_part = layout_part
+            .as_deref()
+            .and_then(|l| first_rels_target(&mut zip, l, "slideMaster"));
+
+        // Build (or reuse) the layout for this slide's source layout part:
+        // decorative shapes + placeholders + per-layout defaults, captured
+        // once. The slide only keeps its own content + a `layout` reference.
+        let (layout_field, lprotos, ldefaults, lfonts, lfbg) = match layout_part.as_deref() {
+            Some(lp) => {
+                if !layout_cache.contains_key(lp) {
+                    let built = build_layout(
+                        &mut zip,
+                        lp,
+                        master_part.as_deref(),
+                        &slots,
+                        &mut media,
+                        &mut skipped,
+                    )?;
+                    layouts.insert(built.key.clone(), built.def.clone());
+                    layout_cache.insert(lp.to_string(), built);
+                }
+                let lb = layout_cache.get(lp).expect("just inserted");
+                (
+                    Some(lb.key.clone()),
+                    lb.protos.clone(),
+                    lb.defaults.clone(),
+                    lb.fonts.clone(),
+                    lb.fallback_bg.clone(),
+                )
+            }
+            // Slide with no layout (rare/invalid): fall back to the
+            // presentation-level master defaults/fonts/bg, flat (no layout).
+            None => (
+                None,
+                BTreeMap::new(),
+                defaults.clone(),
+                fonts.clone(),
+                master_bg.clone(),
+            ),
+        };
         let mut ctx = PageCtx {
             page_no,
             slots: &slots,
-            defaults: defaults.clone(),
-            layout_placeholders: BTreeMap::new(),
-            fonts: fonts.clone(),
+            defaults: ldefaults,
+            layout_placeholders: lprotos,
+            fonts: lfonts,
             used_ids: BTreeSet::new(),
             media: &mut media,
             skipped: &mut skipped,
-            fallback_bg: master_bg.clone(),
+            fallback_bg: lfbg,
+            layout_key: layout_field.clone(),
         };
-        let page = extract_page(&slide, part, &mut zip, &mut ctx)?;
+        let page = extract_slide(&slide, part, &mut zip, &mut ctx, &rels)?;
         element_count += page.elements.len();
 
         let file_name = format!("{page_no}.page");
@@ -205,7 +254,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         custom_fonts: Vec::new(),
         size,
         theme,
-        layouts: None,
+        layouts: if layouts.is_empty() { None } else { Some(layouts) },
         pages,
     };
     let deck_yaml = serde_yaml::to_string(&presentation).map_err(|e| Error::Invalid(format!("serialize deck: {e}")))?;
@@ -239,6 +288,9 @@ struct PageCtx<'a> {
     media: &'a mut BTreeMap<String, String>,
     skipped: &'a mut Vec<Skipped>,
     fallback_bg: Option<Fill>,
+    /// SlideForge extension key this slide's page will reference
+    /// (`Presentation.layouts[key]`); set from the resolved layout.
+    layout_key: Option<String>,
 }
 
 impl<'a> PageCtx<'a> {
@@ -524,6 +576,179 @@ fn placeholder_proto(el: &XmlEl, slots: &SlotColors) -> Option<PlaceholderProto>
     Some(PlaceholderProto { xfrm, prst, defaults })
 }
 
+/// Owned bundle of a layout's build artifacts, cached per distinct layout
+/// part so every slide sharing the layout inherits the same decorations,
+/// placeholders and defaults (built once).
+struct LayoutBuild {
+    key: String,
+    def: LayoutDef,
+    /// Placeholder protos for slide-time inheritance (richer than the
+    /// serialised [`PlaceholderDef`]).
+    protos: BTreeMap<PhKey, PlaceholderProto>,
+    defaults: MasterDefaults,
+    fonts: ThemeFonts,
+    fallback_bg: Option<Fill>,
+}
+
+/// Derive a stable PPTD layout key from the layout part path, e.g.
+/// `ppt/slideLayouts/slideLayout13.xml` → `layout_13`.
+fn layout_key(layout_part: &str) -> String {
+    let stem = layout_part.rsplit('/').next().unwrap_or(layout_part);
+    let stem = stem.trim_end_matches(".xml");
+    let digits: String = stem
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    if digits.is_empty() {
+        format!("layout_{}", stem.replace('.', "_"))
+    } else {
+        format!("layout_{digits}")
+    }
+}
+
+/// Convert a captured layout placeholder proto into the serialisable
+/// [`PlaceholderDef`] (geometry + run-style defaults).
+fn placeholder_def(proto: &PlaceholderProto, fonts: &ThemeFonts) -> PlaceholderDef {
+    PlaceholderDef {
+        bounds: to_bounds(&proto.xfrm),
+        style: None,
+        color: proto.defaults.color.clone(),
+        font_size: proto.defaults.sz,
+        font_family: proto
+            .defaults
+            .latin_typeface
+            .as_deref()
+            .and_then(|tf| resolve_typeface(tf, fonts))
+            .map(FontFamily::Single),
+        bold: proto.defaults.bold,
+        italic: proto.defaults.italic,
+        align: None,
+    }
+}
+
+/// Parse a slide's `.rels` → (relationship map, layout part path).
+fn parse_slide_rels(
+    zip: &mut zip::ZipArchive<fs::File>,
+    part: &str,
+) -> (BTreeMap<String, String>, Option<String>) {
+    let mut rels = BTreeMap::new();
+    let mut layout_part = None;
+    if let Ok(rels_root) = parse_part(zip, &rels_part(part)) {
+        for rel in children(&rels_root, "Relationship") {
+            let id = attr(rel, "Id").unwrap_or_default().to_string();
+            let target = attr(rel, "Target").unwrap_or_default();
+            let resolved = resolve_target(part, target);
+            if attr(rel, "Type").is_some_and(|t| t.ends_with("/slideLayout"))
+                && layout_part.is_none()
+            {
+                layout_part = Some(resolved.clone());
+            }
+            rels.insert(id, resolved);
+        }
+    }
+    (rels, layout_part)
+}
+
+/// Build a [`LayoutDef`] (background + decorative elements + placeholders)
+/// plus the internal proto map and per-layout defaults, by walking the
+/// layout's master spTree and the layout spTree once. Decorative shapes go
+/// into `def.elements`; placeholders into both `def.placeholders` and the
+/// returned `protos` (for slide-time inheritance).
+fn build_layout(
+    zip: &mut zip::ZipArchive<fs::File>,
+    layout_part: &str,
+    master_part: Option<&str>,
+    slots: &SlotColors,
+    media: &mut BTreeMap<String, String>,
+    skipped: &mut Vec<Skipped>,
+) -> Result<LayoutBuild> {
+    let key = layout_key(layout_part);
+
+    // Per-layout defaults/fonts/bg from the layout's master (same chain the
+    // slide would resolve).
+    let (defaults, fonts, fallback_bg) = match master_part {
+        Some(master) => (
+            master_defaults(zip, master, slots),
+            first_rels_target(zip, master, "theme")
+                .map(|t| theme_fonts(zip, &t))
+                .unwrap_or_default(),
+            read_master_bg(zip, master, slots),
+        ),
+        None => (MasterDefaults::default(), ThemeFonts::default(), None),
+    };
+
+    let mut elements = Vec::new();
+    let mut protos: BTreeMap<PhKey, PlaceholderProto> = BTreeMap::new();
+    {
+        let mut lctx = PageCtx {
+            page_no: 0,
+            slots,
+            defaults: defaults.clone(),
+            layout_placeholders: BTreeMap::new(),
+            fonts: fonts.clone(),
+            used_ids: BTreeSet::new(),
+            media,
+            skipped,
+            fallback_bg: fallback_bg.clone(),
+            layout_key: None,
+        };
+        // Master decorative shapes + placeholders (master inherits to
+        // every slide via this layout).
+        if let Some(master) = master_part {
+            if let Ok(master_el) = parse_part(zip, master) {
+                if let Some(tree) = first(&master_el, "cSld").and_then(|c| first(c, "spTree")) {
+                    let master_rels = layout_rels(zip, master);
+                    for child in tree.children.iter().filter_map(|n| n.as_element()) {
+                        let mut generated = Vec::new();
+                        walk_sp_tree_child(child, &master_rels, &mut lctx, None, true, &mut generated)?;
+                        elements.extend(generated.into_iter().flatten());
+                    }
+                }
+            }
+        }
+        // Layout decorative shapes + placeholders.
+        if let Ok(layout_el) = parse_part(zip, layout_part) {
+            if let Some(tree) = first(&layout_el, "cSld").and_then(|c| first(c, "spTree")) {
+                let layout_rels = layout_rels(zip, layout_part);
+                for child in tree.children.iter().filter_map(|n| n.as_element()) {
+                    let mut generated = Vec::new();
+                    walk_sp_tree_child(child, &layout_rels, &mut lctx, None, true, &mut generated)?;
+                    elements.extend(generated.into_iter().flatten());
+                }
+            }
+        }
+        protos = std::mem::take(&mut lctx.layout_placeholders);
+    }
+
+    // Layout background: the layout's own <p:bg>, else the master's.
+    let background = parse_part(zip, layout_part)
+        .ok()
+        .and_then(|l| bg_fill(&l, slots))
+        .or_else(|| fallback_bg.clone());
+
+    let placeholders = protos
+        .iter()
+        .map(|(k, p)| (k.0.clone(), placeholder_def(p, &fonts)))
+        .collect();
+
+    Ok(LayoutBuild {
+        key,
+        def: LayoutDef {
+            background,
+            elements,
+            placeholders,
+        },
+        protos,
+        defaults,
+        fonts,
+        fallback_bg,
+    })
+}
+
 /// Bullet + paragraph-margin info parsed from a `<a:lvl1pPr>`.
 #[derive(Default, Clone)]
 struct BulletInfo {
@@ -661,11 +886,12 @@ fn read_title(zip: &mut zip::ZipArchive<fs::File>) -> Result<Option<String>> {
 // Slide extraction
 // ---------------------------------------------------------------------------
 
-fn extract_page(
+fn extract_slide(
     slide: &XmlEl,
     part: &str,
-    zip: &mut zip::ZipArchive<fs::File>,
+    _zip: &mut zip::ZipArchive<fs::File>,
     ctx: &mut PageCtx<'_>,
+    rels: &BTreeMap<String, String>,
 ) -> Result<Page> {
     let c_sld = first(slide, "cSld").ok_or_else(|| {
         Error::Invalid(format!("slide part {part} has no p:cSld"))
@@ -674,87 +900,27 @@ fn extract_page(
         Error::Invalid(format!("slide part {part} has no p:spTree"))
     })?;
 
-    // Slide relationship map for media + layout resolution.
-    let rels_part = rels_part(part);
-    let mut rels = BTreeMap::new();
-    let mut layout_part = None;
-    if let Ok(rels_root) = parse_part(zip, &rels_part) {
-        for rel in children(&rels_root, "Relationship") {
-            let id = attr(rel, "Id").unwrap_or_default().to_string();
-            let target = attr(rel, "Target").unwrap_or_default();
-            let resolved = resolve_target(part, target);
-            if attr(rel, "Type").is_some_and(|t| t.ends_with("/slideLayout")) && layout_part.is_none() {
-                layout_part = Some(resolved.clone());
-            }
-            rels.insert(id, resolved);
-        }
-    }
+    // SlideForge layout extension: the slide carries only its own content.
+    // Master/layout decorations, background and placeholder templates now
+    // live in `Presentation.layouts[ctx.layout_key]`; the build step merges
+    // them back when baking (P3 will emit real slideLayout parts). A slide
+    // without a layout keeps the resolved fallback (flat, canonical PPTD).
+    let background = if ctx.layout_key.is_some() {
+        bg_fill(slide, ctx.slots)
+    } else {
+        bg_fill(slide, ctx.slots).or_else(|| ctx.fallback_bg.clone())
+    };
 
-    // Bake the slide master's drawables, then the layout's, then the slide's
-    // own (paint order: master at the bottom, slide on top). PPTD v2 has no
-    // inheritance chain, so cover/section decorations that live in the master
-    // or layout would otherwise blank the slide.
     let mut elements = Vec::new();
-    let master_part = layout_part.as_deref().and_then(|layout| {
-        first_rels_target(zip, layout, "slideMaster")
-    });
-    // Defaults are per-slide: the slide's own master may carry a different
-    // otherStyle (master1 28.35pt vs master2 21.25pt) and theme.
-    if let Some(master) = master_part.as_deref() {
-        ctx.defaults = master_defaults(zip, master, ctx.slots);
-        let theme_part = first_rels_target(zip, master, "theme");
-        if let Some(theme) = theme_part.as_deref() {
-            ctx.fonts = theme_fonts(zip, theme);
-        }
-    }
-    if let Some(master) = master_part.as_deref() {
-        if let Ok(master_el) = parse_part(zip, master) {
-            if let Some(master_csld) = first(&master_el, "cSld") {
-                if let Some(master_tree) = first(master_csld, "spTree") {
-                    let master_rels = layout_rels(zip, master);
-                    for child in master_tree.children.iter().filter_map(|n| n.as_element()) {
-                        let mut generated = Vec::new();
-                        walk_sp_tree_child(child, &master_rels, ctx, None, true, &mut generated)?;
-                        elements.extend(generated.into_iter().flatten());
-                    }
-                }
-            }
-        }
-    }
-    if let Some(layout) = layout_part.as_deref() {
-        if let Ok(layout_el) = parse_part(zip, layout) {
-            if let Some(layout_csld) = first(&layout_el, "cSld") {
-                if let Some(layout_tree) = first(layout_csld, "spTree") {
-                    for child in layout_tree.children.iter().filter_map(|n| n.as_element()) {
-                        let mut generated = Vec::new();
-                        let layout_rels = layout_rels(zip, layout);
-                        walk_sp_tree_child(child, &layout_rels, ctx, None, true, &mut generated)?;
-                        elements.extend(generated.into_iter().flatten());
-                    }
-                }
-            }
-        }
-    }
-
-    // Layering: slide's own background overrides the layout's, then the
-    // master's. Background of the layout wins over master by design.
-    let background = bg_fill(slide, ctx.slots)
-        .or_else(|| {
-            layout_part.as_deref().and_then(|layout| {
-                parse_part(zip, layout).ok().and_then(|l| bg_fill(&l, ctx.slots))
-            })
-        })
-        .or_else(|| ctx.fallback_bg.clone());
-
     for child in sp_tree.children.iter().filter_map(|n| n.as_element()) {
         let mut generated = Vec::new();
-        walk_sp_tree_child(child, &rels, ctx, None, false, &mut generated)?;
+        walk_sp_tree_child(child, rels, ctx, None, false, &mut generated)?;
         elements.extend(generated.into_iter().flatten());
     }
 
     Ok(Page {
         page_type: None,
-        layout: None,
+        layout: ctx.layout_key.clone(),
         background,
         notes: None,
         elements,
@@ -1078,12 +1244,19 @@ fn map_sp(
             // box behind the text instead of a transparent text box.
             let fill = shape_fill(el, ctx.slots);
             let border = border_from_el(el, ctx.slots);
+            // SlideForge layout extension: mark a slide placeholder with its
+            // `<p:ph type>` so P3 can emit `<p:ph type=...>` and the layout
+            // template in `layouts[key].placeholders[type]` is the inheritance
+            // source. Non-placeholder text boxes carry `None`.
+            let placeholder = ph.as_ref().map(|p| {
+                attr(p, "type").unwrap_or("body").to_string()
+            });
             return Ok(Some(Element::Text(Text {
                 common: common(&x, id),
                 content,
                 fill,
                 border,
-                placeholder: None,
+                placeholder,
             })));
         }
         // Empty text bodies: invisible padding boxes — only keep them when

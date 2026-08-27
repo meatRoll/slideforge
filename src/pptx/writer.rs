@@ -40,8 +40,10 @@ use std::path::Path;
 
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
+use std::collections::HashMap;
+
 use crate::pptd::validate::validate_project;
-use crate::pptd::{Element, Page, Presentation, Project};
+use crate::pptd::{Element, LayoutDef, Page, Presentation, Project};
 use crate::pptx::media::MediaRegistry;
 use crate::pptx::opc::{Rel, content_types_xml, ns, rel_kind, rels_xml};
 use crate::pptx::package::{ContentType, PackageEntry};
@@ -156,7 +158,7 @@ impl<'a> PptxWriter<'a> {
 
             // Register this slide's media up front so rendering can resolve
             // relationship ids and image dimensions.
-            let used = collect_media(page);
+            let used = collect_media(page, presentation.layouts.as_ref());
             let mut ctx = render::RenderCtx::new(presentation.theme.as_ref());
             ctx.media = used.clone();
             for src in &used {
@@ -250,6 +252,19 @@ impl<'a> PptxWriter<'a> {
         ctx: &mut render::RenderCtx<'_>,
     ) -> Result<String> {
         let theme = self.project.presentation.theme.as_ref();
+        // SlideForge layout extension (P2 bake-merge): when a page
+        // references a layout, inherit its background (if the page doesn't
+        // set its own) and paint its decorative elements UNDER the page's
+        // own. P3 will replace this with real slideLayout parts.
+        let layouts = &self.project.presentation.layouts;
+        let layout_def = page
+            .layout
+            .as_ref()
+            .and_then(|key| layouts.as_ref().and_then(|m| m.get(key)));
+        let background = page
+            .background
+            .as_ref()
+            .or_else(|| layout_def.and_then(|l| l.background.as_ref()));
         let mut x = Xml::new();
         x.start(
             "p:sld",
@@ -261,7 +276,7 @@ impl<'a> PptxWriter<'a> {
             ],
         );
         x.start("p:cSld", &[]);
-        if let Some(background) = &page.background {
+        if let Some(background) = background {
             x.start("p:bg", &[]);
             x.start("p:bgPr", &[]);
             render::fill_xml(&mut x, theme, background, None)?;
@@ -271,6 +286,11 @@ impl<'a> PptxWriter<'a> {
         }
         x.start("p:spTree", &[]);
         group_prolog(&mut x);
+        if let Some(l) = layout_def {
+            for element in &l.elements {
+                render::render_element(&mut x, ctx, element, index - 1)?;
+            }
+        }
         for element in &page.elements {
             render::render_element(&mut x, ctx, element, index - 1)?;
         }
@@ -455,13 +475,32 @@ fn slide_layout_xml() -> String {
 }
 
 /// Media sources referenced by a page (in element order, deduplicated).
-fn collect_media(page: &Page) -> Vec<String> {
+/// Includes images inherited from a referenced layout (bake-merge paints
+/// the layout's decorative elements under the page's own).
+fn collect_media(
+    page: &Page,
+    layouts: Option<&HashMap<String, LayoutDef>>,
+) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let layout_def = page
+        .layout
+        .as_ref()
+        .and_then(|key| layouts.and_then(|m| m.get(key)));
+    let mut push = |src: &str, out: &mut Vec<String>| {
+        if !out.iter().any(|s| s == src) {
+            out.push(src.to_string());
+        }
+    };
+    if let Some(l) = layout_def {
+        for element in &l.elements {
+            if let Element::Image(image) = element {
+                push(&image.src, &mut out);
+            }
+        }
+    }
     for element in &page.elements {
         if let Element::Image(image) = element {
-            if !out.contains(&image.src) {
-                out.push(image.src.clone());
-            }
+            push(&image.src, &mut out);
         }
     }
     out
