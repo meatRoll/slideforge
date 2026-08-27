@@ -148,6 +148,9 @@ pub struct Border {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
+    /// Gradient outline (overrides `color` when present).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GradientFill>,
 }
 
 /// Per-side border spec: `null`, a uniform [`Border`], `[top-bottom,

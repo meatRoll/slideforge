@@ -99,6 +99,7 @@ fn parses_border_spec_shapes() {
                 style: Some(LineStyle::Dash),
                 width: None,
                 color: None,
+                gradient: None,
             }),
         ),
         (
@@ -109,6 +110,7 @@ fn parses_border_spec_shapes() {
                     style: Some(LineStyle::Solid),
                     width: None,
                     color: None,
+                    gradient: None,
                 }),
             ]),
         ),

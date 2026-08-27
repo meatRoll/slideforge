@@ -163,6 +163,18 @@ pub struct TextContent {
     /// `[horizontal, vertical]` alignment; defaults to `["left", "top"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Alignment>,
+    /// List bullet glyph (e.g. `•`); absent → no bullet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_char: Option<String>,
+    /// Bullet typeface (e.g. `Arial`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_font: Option<String>,
+    /// Paragraph left margin (`marL`) in px — the bullet's text offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_margin: Option<f64>,
+    /// Hanging indent in px (negative pulls the bullet left of `marL`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_indent: Option<f64>,
     /// Text gradient (applied to the text itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient: Option<super::shared::GradientFill>,
@@ -178,6 +190,13 @@ pub struct Text {
     #[serde(flatten)]
     pub common: ElementCommon,
     pub content: TextContent,
+    /// Background fill of the box (solid/gradient). Absent → transparent
+    /// (a plain text box must not inherit the automatic shape fill).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    /// Box outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
 }
 
 /// `elementType: shape` — a built-in or custom geometry.

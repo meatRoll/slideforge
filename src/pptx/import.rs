@@ -35,8 +35,8 @@ use crate::pptd::elements::{
     TextDirection,
 };
 use crate::pptd::shared::{
-    Alignment, Border, Bounds, Color, Fill, FontFamily, GradientType, HorizontalAlign,
-    ImageCrop, ImageFit, ImageFitMode, LineStyle, VerticalAlign,
+    Alignment, Border, Bounds, Color, Fill, FontFamily, GradientFill, GradientType,
+    HorizontalAlign, ImageCrop, ImageFit, ImageFitMode, LineStyle, VerticalAlign,
 };
 use crate::pptd::theme::Theme;
 use crate::{Error, Result};
@@ -145,6 +145,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
             page_no,
             slots: &slots,
             defaults: defaults.clone(),
+            layout_placeholders: BTreeMap::new(),
             fonts: fonts.clone(),
             used_ids: BTreeSet::new(),
             media: &mut media,
@@ -227,6 +228,10 @@ struct PageCtx<'a> {
     slots: &'a SlotColors,
     /// Master `otherStyle` default run properties for un-styled runs.
     defaults: MasterDefaults,
+    /// Placeholders captured from the layout/master spTree (keyed by
+    /// `(type, idx)`) so slide placeholders that omit `<a:xfrm>` inherit
+    /// geometry + `lstStyle` defaults per the OOXML placeholder chain.
+    layout_placeholders: BTreeMap<PhKey, PlaceholderProto>,
     /// Theme major/minor fonts to resolve `+mj-lt` / `+mn-lt` aliases.
     fonts: ThemeFonts,
     used_ids: BTreeSet<String>,
@@ -446,6 +451,12 @@ fn master_defaults(
     let Some(rpr) = first(lvl1, "defRPr") else {
         return empty;
     };
+    def_rpr_defaults(rpr, slots)
+}
+
+/// `defRPr` → `MasterDefaults` (shared by the master `otherStyle` path and
+/// the layout placeholder `lstStyle` path).
+fn def_rpr_defaults(rpr: &XmlEl, slots: &SlotColors) -> MasterDefaults {
     MasterDefaults {
         sz: attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok()).map(|s| s / 100.0),
         color: color_from_fill(rpr, slots),
@@ -456,6 +467,142 @@ fn master_defaults(
         bold: attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
         italic: attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
     }
+}
+
+/// Placeholder match key: OOXML `type` (absent → "body") plus optional `idx`.
+type PhKey = (String, Option<String>);
+
+/// Inherited geometry + text defaults of a layout/master placeholder, used
+/// to rebuild slide placeholders that omit `<a:xfrm>` / `<a:prstGeom>` /
+/// `<a:lstStyle>` per the OOXML placeholder inheritance chain.
+#[derive(Clone)]
+struct PlaceholderProto {
+    /// Absolute (slide-space) transform captured from the layout shape.
+    xfrm: Xform,
+    /// Preset geometry name when the layout placeholder carries one.
+    prst: Option<String>,
+    /// Run-style fallback from the placeholder's `lstStyle → lvl1pPr →
+    /// defRPr` — for a title placeholder this is the only source of the
+    /// 24pt bold blue face, since the master `otherStyle` is generic.
+    defaults: MasterDefaults,
+}
+
+/// `(type, idx)` match key for a `<p:ph>` element. Absent `type` normalises
+/// to `"body"` so a body placeholder matches its layout peer.
+fn ph_key(ph: &XmlEl) -> PhKey {
+    (
+        attr(ph, "type").unwrap_or("body").to_string(),
+        attr(ph, "idx").map(str::to_string),
+    )
+}
+
+/// Look up an inherited placeholder by `(type, idx)`, falling back to a
+/// type-only match when the indices do not line up.
+fn lookup_placeholder<'a>(
+    map: &'a BTreeMap<PhKey, PlaceholderProto>,
+    key: &PhKey,
+) -> Option<&'a PlaceholderProto> {
+    map.get(key).or_else(|| map.get(&(key.0.clone(), None)))
+}
+
+/// Capture a layout/master placeholder's geometry + `lstStyle` defaults so
+/// slide placeholders that rely on OOXML inheritance can be rebuilt.
+fn placeholder_proto(el: &XmlEl, slots: &SlotColors) -> Option<PlaceholderProto> {
+    let sp_pr = first(el, "spPr")?;
+    let xfrm_el = first(sp_pr, "xfrm")?;
+    let xfrm = Xform::parse(xfrm_el);
+    let prst = first(sp_pr, "prstGeom")
+        .and_then(|g| attr(g, "prst"))
+        .map(str::to_string);
+    let defaults = first(el, "txBody")
+        .and_then(|tb| first(tb, "lstStyle"))
+        .and_then(|lst| first(lst, "lvl1pPr"))
+        .and_then(|lvl1| first(lvl1, "defRPr"))
+        .map(|rpr| def_rpr_defaults(rpr, slots))
+        .unwrap_or_default();
+    Some(PlaceholderProto { xfrm, prst, defaults })
+}
+
+/// Bullet + paragraph-margin info parsed from a `<a:lvl1pPr>`.
+#[derive(Default, Clone)]
+struct BulletInfo {
+    char: Option<String>,
+    font: Option<String>,
+    margin: Option<f64>,
+    indent: Option<f64>,
+}
+
+/// `<p:style><a:fontRef idx="minor|major"> <colour/> </a:fontRef>` → the
+/// shape's default text colour / font, merged onto the master `otherStyle`.
+/// A coloured "label" card (e.g. a blue rect with the word 背景) carries no
+/// explicit run colour; the white text comes from the style's fontRef.
+fn font_ref_defaults(base: MasterDefaults, sp_el: &XmlEl, slots: &SlotColors) -> MasterDefaults {
+    let Some(style) = first(sp_el, "style") else { return base; };
+    let Some(fr) = first(style, "fontRef") else { return base; };
+    let mut d = base;
+    if let Some(c) = color_from_fill(fr, slots) {
+        d.color = Some(c);
+    }
+    match attr(fr, "idx") {
+        Some("minor") => d.latin_typeface = Some("+mn-lt".to_string()),
+        Some("major") => d.latin_typeface = Some("+mj-lt".to_string()),
+        _ => {}
+    }
+    d
+}
+
+/// Merge a `<a:defRPr>` onto `base` (overrides only present attributes),
+/// so an `lstStyle` that specifies just `sz`/`i` keeps the base colour/font.
+fn merge_def_rpr(mut base: MasterDefaults, rpr: &XmlEl, slots: &SlotColors) -> MasterDefaults {
+    if let Some(sz) = attr(rpr, "sz").and_then(|s| s.parse::<f64>().ok()) {
+        base.sz = Some(sz / 100.0);
+    }
+    if let Some(c) = color_from_fill(rpr, slots) {
+        base.color = Some(c);
+    }
+    if let Some(tf) = first(rpr, "latin")
+        .and_then(|l| attr(l, "typeface"))
+        .filter(|s| !s.is_empty())
+    {
+        base.latin_typeface = Some(tf.to_string());
+    }
+    if let Some(b) = attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()) {
+        base.bold = Some(b != 0);
+    }
+    if let Some(i) = attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()) {
+        base.italic = Some(i != 0);
+    }
+    base
+}
+
+/// `txBody > lstStyle > lvl1pPr` → merged run-style defaults (`defRPr`) plus
+/// the bullet glyph / hanging indent. Returns `base` unchanged when the box
+/// has no `lstStyle` (plain text boxes / placeholders inherit elsewhere).
+fn lst_style_info(
+    base: MasterDefaults,
+    tx_body: &XmlEl,
+    slots: &SlotColors,
+) -> (MasterDefaults, BulletInfo) {
+    let mut d = base;
+    let mut bullet = BulletInfo::default();
+    let Some(lst) = first(tx_body, "lstStyle") else { return (d, bullet); };
+    let Some(lvl1) = first(lst, "lvl1pPr") else { return (d, bullet); };
+    if let Some(v) = attr(lvl1, "marL").and_then(|s| s.parse::<f64>().ok()) {
+        bullet.margin = Some(px(v));
+    }
+    if let Some(v) = attr(lvl1, "indent").and_then(|s| s.parse::<f64>().ok()) {
+        bullet.indent = Some(px(v));
+    }
+    if let Some(bf) = first(lvl1, "buFont").and_then(|e| attr(e, "typeface")) {
+        bullet.font = Some(bf.to_string());
+    }
+    if let Some(bc) = first(lvl1, "buChar").and_then(|e| attr(e, "char")) {
+        bullet.char = Some(bc.to_string());
+    }
+    if let Some(rpr) = first(lvl1, "defRPr") {
+        d = merge_def_rpr(d, rpr, slots);
+    }
+    (d, bullet)
 }
 
 /// 12 clrScheme slots → hex strings, plus the standard `a:clrMap` aliases
@@ -817,21 +964,60 @@ fn map_sp(
 ) -> Result<Option<Element>> {
     let name = cnv_name(el).unwrap_or_else(|| "sp".to_string());
     let nv_pr = first(el, "nvSpPr").and_then(|nv| first(nv, "nvPr"));
-    // Placeholders are filled per-slide; in a layout they only carry sample
-    // text that never renders on real slides, so they are dropped.
-    if in_layout && nv_pr.is_some_and(|p| first(p, "ph").is_some()) {
-        return Ok(None);
+    let ph = nv_pr.and_then(|p| first(p, "ph"));
+    // Layout/master placeholders only carry sample text that never renders
+    // on real slides, so they are not emitted — but first capture their
+    // geometry + `lstStyle` defaults so slide placeholders that omit
+    // `<a:xfrm>` (the OOXML placeholder inheritance chain) can inherit it.
+    // Layout entries overwrite master entries (layout wins, per the chain).
+    if in_layout {
+        if let Some(ph_el) = ph {
+            if let Some(proto) = placeholder_proto(el, ctx.slots) {
+                ctx.layout_placeholders.insert(ph_key(ph_el), proto);
+            }
+            return Ok(None);
+        }
     }
     let ext = nv_pr
         .and_then(|p| first(p, "extLst"))
         .and_then(|lst| children_in(lst, "ext").into_iter().find(|e| attr(e, "uri") == Some(PPTD_ICON_URI)))
         .and_then(|ext| first(ext, "icon"));
     let sp_pr = first(el, "spPr");
-    let Some(xfrm) = sp_pr.and_then(|p| first(p, "xfrm")) else {
-        ctx.skip(&name, "shape has no a:xfrm");
-        return Ok(None);
+    let xfrm_el = sp_pr.and_then(|p| first(p, "xfrm"));
+    // A slide placeholder with no `<a:xfrm>` inherits the layout/master
+    // placeholder's transform (plus prstGeom + `lstStyle` defaults) instead
+    // of being skipped — PowerPoint/WPS omit `<a:xfrm>` whenever the shape
+    // is meant to line up with the layout placeholder.
+    let mut inherited_defaults: Option<MasterDefaults> = None;
+    // A placeholder inherits the layout placeholder's run-style defaults
+    // (colour/font/size) even when the slide carries its own `<a:xfrm>`:
+    // geometry may be overridden per-slide while text styling still falls
+    // back to the layout's `lstStyle` defRPr.
+    let inherited_proto: Option<PlaceholderProto> = ph.and_then(|ph_el| {
+        lookup_placeholder(&ctx.layout_placeholders, &ph_key(ph_el)).cloned()
+    });
+    if let Some(proto) = &inherited_proto {
+        inherited_defaults = Some(proto.defaults.clone());
+    }
+    let (x, inherited_prst) = match (xfrm_el, inherited_proto) {
+        (Some(xel), _) => (Xform::parse(xel).apply(group), None),
+        (None, Some(proto)) => {
+            // The proto xfrm is already in slide space; placeholders are
+            // never grouped, so the group transform does not apply.
+            (proto.xfrm, proto.prst)
+        }
+        (None, None) => {
+            ctx.skip(
+                &name,
+                if ph.is_some() {
+                    "placeholder has no a:xfrm and no matching layout placeholder"
+                } else {
+                    "shape has no a:xfrm"
+                },
+            );
+            return Ok(None);
+        }
     };
-    let x = Xform::parse(xfrm).apply(group);
 
     // `pptd:icon` extension → icon element.
     if let Some(icon_el) = ext {
@@ -842,7 +1028,7 @@ fn map_sp(
                 common: common(&x, id),
                 icon_name,
                 fill,
-                border: border_from_el(sp_pr, ctx.slots),
+                border: border_from_el(el, ctx.slots),
                 shadow: None,
             })));
         }
@@ -850,22 +1036,58 @@ fn map_sp(
 
     // Determine geometry: preset name or custom path (guide evaluation).
     let geom = sp_pr.and_then(|p| first(p, "custGeom"));
-    let prst = sp_pr.and_then(|p| first(p, "prstGeom")).and_then(|g| attr(g, "prst"));
+    // A slide placeholder that omits `<a:prstGeom>` inherits the layout's
+    // (typically `rect`) — without it the shape would hit the
+    // "neither prstGeom nor custGeom" skip.
+    let prst = sp_pr
+        .and_then(|p| first(p, "prstGeom"))
+        .and_then(|g| attr(g, "prst"))
+        .map(str::to_string)
+        .or(inherited_prst);
 
     // Text boxes: a `p:txBody` with non-empty text.
     if let Some(tx_body) = first(el, "txBody") {
-        if let Some(content) = text_content(tx_body, ctx.slots, ctx, &name) {
+        // Run-style fallback chain (low → high priority): master
+        // `otherStyle` → shape `<p:style>` fontRef (label colour/font) →
+        // placeholder-inherited layout `lstStyle` → the box's own
+        // `lstStyle` defRPr (size/italic/…). Each layer merges so an
+        // unspecified attribute keeps falling back; runs/paragraphs then
+        // override on top (handled inside `text_content`).
+        let mut base = ctx.defaults.clone();
+        base = font_ref_defaults(base, el, ctx.slots);
+        if let Some(d) = &inherited_defaults {
+            base = d.clone();
+        }
+        let (base, bullet) = lst_style_info(base, tx_body, ctx.slots);
+        let saved_defaults = ctx.defaults.clone();
+        ctx.defaults = base;
+        let mut content = text_content(tx_body, ctx.slots, ctx, &name);
+        ctx.defaults = saved_defaults;
+        if let Some(ref mut c) = content {
+            c.bullet_char = bullet.char;
+            c.bullet_font = bullet.font;
+            c.list_margin = bullet.margin;
+            c.list_indent = bullet.indent;
+        }
+        if let Some(content) = content {
             let id = ctx.unique_id(&name, "text");
+            // A text box may itself be a coloured card (solid/gradient fill)
+            // with an outline; capture both so the rebuild reproduces the
+            // box behind the text instead of a transparent text box.
+            let fill = shape_fill(el, ctx.slots);
+            let border = border_from_el(el, ctx.slots);
             return Ok(Some(Element::Text(Text {
                 common: common(&x, id),
                 content,
+                fill,
+                border,
             })));
         }
         // Empty text bodies: invisible padding boxes — only keep them when
         // they carry a visible fill/border of their own.
     }
 
-    let fill = sp_pr.and_then(|p| fill_and_border(p, ctx.slots));
+    let fill = shape_fill(el, ctx.slots);
     if sp_pr.is_some_and(|p| first(p, "blipFill").is_some()) {
         ctx.skip(&name, "image fills on shapes are not representable in PPTD");
     }
@@ -882,7 +1104,7 @@ fn map_sp(
                     view_box: Some(view_box),
                     path: Some(path),
                     fill,
-                    border: border_from_el(sp_pr, ctx.slots),
+                    border: border_from_el(el, ctx.slots),
                     shadow: None,
                 }));
             }
@@ -902,7 +1124,7 @@ fn map_sp(
             view_box: None,
             path: None,
             fill,
-            border: border_from_el(sp_pr, ctx.slots),
+            border: border_from_el(el, ctx.slots),
             shadow: None,
         }));
     } else {
@@ -935,6 +1157,37 @@ fn fill_and_border(sp_pr: &XmlEl, slots: &SlotColors) -> Option<Fill> {
     None
 }
 
+/// `<p:style><a:fillRef idx="N"> <colour/> </a:fillRef>` → the shape's fill
+/// when `spPr` carries no explicit fill. `idx="0"` means noFill; `idx≥1`
+/// uses the fillRef's child colour (resolved through the theme slots). WPS
+/// draws these "label card" rectangles (矩形 6/11/13 on slide 3) with no
+/// `spPr` fill — the accent1 fill comes from here.
+fn fill_ref_fill(sp_el: &XmlEl, slots: &SlotColors) -> Option<Fill> {
+    let style = first(sp_el, "style")?;
+    let fr = first(style, "fillRef")?;
+    if attr(fr, "idx")? == "0" {
+        return None;
+    }
+    color_from_fill(fr, slots).map(|color| Fill::Solid { color })
+}
+
+/// Shape fill precedence: explicit `spPr` fill (solid/gradient) →
+/// `<a:noFill/>` (no fill, do NOT fall back) → `<p:style><a:fillRef>`.
+fn shape_fill(sp_el: &XmlEl, slots: &SlotColors) -> Option<Fill> {
+    if let Some(sp_pr) = first(sp_el, "spPr") {
+        if first(sp_pr, "noFill").is_some() {
+            return None;
+        }
+        if let Some(solid) = first(sp_pr, "solidFill") {
+            return color_from_fill(solid, slots).map(|color| Fill::Solid { color });
+        }
+        if let Some(grad) = first(sp_pr, "gradFill") {
+            return gradient_from(grad, slots);
+        }
+    }
+    fill_ref_fill(sp_el, slots)
+}
+
 fn solid_fill(sp_pr: &XmlEl, slots: &SlotColors) -> Option<Fill> {
     if first(sp_pr, "noFill").is_some() {
         return None;
@@ -944,28 +1197,71 @@ fn solid_fill(sp_pr: &XmlEl, slots: &SlotColors) -> Option<Fill> {
         .map(|color| Fill::Solid { color })
 }
 
-fn border_from_el(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Border> {
-    let sp_pr = sp_pr?;
-    let ln = first(sp_pr, "ln")?;
-    if first(ln, "noFill").is_some() {
+fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
+    // Explicit `<a:ln>` in spPr takes precedence; `<a:noFill>` inside it
+    // means "no line" and must NOT fall back to the style lnRef.
+    if let Some(sp_pr) = first(sp_el, "spPr") {
+        if let Some(ln) = first(sp_pr, "ln") {
+            if first(ln, "noFill").is_some() {
+                return None;
+            }
+            let width = attr(ln, "w").and_then(|s| s.parse::<i64>().ok()).map(|v| px(v as f64));
+            let style = first(ln, "prstDash").and_then(|d| attr(d, "val")).map(|v| match v {
+                "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot" | "sysDashDot" => LineStyle::Dash,
+                "dot" | "sysDot" => LineStyle::Dot,
+                _ => LineStyle::Solid,
+            });
+            // A gradient outline is captured verbatim; a solid colour
+            // directly. `<a:ln>` without any fill child draws no visible
+            // outline in Office (it inherits the shape's fill) — emit
+            // nothing rather than a 1pt black ring.
+            let gradient = first(ln, "gradFill")
+                .and_then(|g| gradient_from(g, slots))
+                .and_then(|f| match f {
+                    Fill::Gradient { gradient_type, stops, angle } => {
+                        Some(GradientFill { gradient_type, stops, angle })
+                    }
+                    _ => None,
+                });
+            let color = first(ln, "solidFill").and_then(|s| color_from_fill(s, slots));
+            if gradient.is_none() && color.is_none() {
+                return None;
+            }
+            return Some(Border {
+                style,
+                width,
+                color,
+                gradient,
+            });
+        }
+    }
+    // No explicit spPr `<a:ln>` → fall back to `<p:style><a:lnRef>`.
+    ln_ref_border(sp_el, slots)
+}
+
+/// `<p:style><a:lnRef idx="N"> <colour/> </a:lnRef>` → the shape's outline
+/// when spPr carries no explicit `<a:ln>`. `idx="0"` → no line; `idx≥1`
+/// references a theme line style — width scales with idx in the stock
+/// Office theme (0.5/1/1.5 px for 1/2/3) and the colour is the lnRef's
+/// child, resolved through the theme slots (lumMod etc. applied).
+fn ln_ref_border(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
+    let style = first(sp_el, "style")?;
+    let lr = first(style, "lnRef")?;
+    let idx = attr(lr, "idx")?;
+    if idx == "0" {
         return None;
     }
-    let width = attr(ln, "w").and_then(|s| s.parse::<i64>().ok()).map(|v| px(v as f64));
-    let color = color_from_fill(ln, slots);
-    // `<a:ln>` without any fill child draws no visible outline in Office
-    // (it inherits the shape's fill, which for these decorative WPS shapes
-    // is the background) — emitting a 1pt black border would ring every
-    // shape. Skip it unless there is an explicit color.
-    let color = color?;
-    let style = first(ln, "prstDash").and_then(|d| attr(d, "val")).map(|v| match v {
-        "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot" | "sysDashDot" => LineStyle::Dash,
-        "dot" | "sysDot" => LineStyle::Dot,
-        _ => LineStyle::Solid,
-    });
-    Some(Border {
-        style,
-        width,
-        color: Some(color),
+    let width = match idx {
+        "1" => 0.5,
+        "2" => 1.0,
+ "3" => 1.5,
+        _ => 1.0,
+    };
+    color_from_fill(lr, slots).map(|c| Border {
+        style: Some(LineStyle::Solid),
+        width: Some(width),
+        color: Some(c),
+        gradient: None,
     })
 }
 
@@ -1367,7 +1663,7 @@ fn map_line(el: &XmlEl, ctx: &mut PageCtx<'_>, group: Option<&Xform>) -> Option<
     let view_box = (x.ext.0, x.ext.1);
     let points = format!("{},{} {},{}", rnd(x0), rnd(y0), rnd(x1), rnd(y1));
 
-    let border = sp_pr.and_then(|p| border_from_el(Some(p), ctx.slots));
+    let border = border_from_el(el, ctx.slots);
     let id = ctx.unique_id(&name, "line");
     Some(Element::Line(Line {
         common: common(&x, id),
@@ -1440,7 +1736,57 @@ fn color_from_fill(el: &XmlEl, slots: &SlotColors) -> Option<Color> {
         };
         return Some(col(hex, None));
     }
+    if let Some(prst) = first_descendant(el, "prstClr") {
+        let hex = preset_color_hex(attr(prst, "val")?);
+        return Some(col_with_modifiers(hex, alpha_of(prst), prst));
+    }
     None
+}
+
+/// OOXML `<a:prstClr val="..."/>` preset colour name → hex (no `#`).
+/// Covers the named colours most commonly used in PowerPoint/WPS decks;
+/// unknown names fall back to black so the run is never silently dropped
+/// (the same value the master `otherStyle` would otherwise supply).
+fn preset_color_hex(name: &str) -> &'static str {
+    match name {
+        "black" | "dkBlack" => "000000",
+        "white" | "ltWhite" => "FFFFFF",
+        "red" => "FF0000",
+        "green" | "lime" => "00FF00",
+        "blue" => "0000FF",
+        "yellow" => "FFFF00",
+        "magenta" | "fuchsia" => "FF00FF",
+        "cyan" | "aqua" => "00FFFF",
+        "gray" | "grey" => "808080",
+        "maroon" => "800000",
+        "olive" => "808000",
+        "navy" => "000080",
+        "purple" => "800080",
+        "teal" => "008080",
+        "silver" => "C0C0C0",
+        "orange" => "FFA500",
+        "pink" => "FFC0CB",
+        "brown" => "A52A2A",
+        "gold" => "FFD700",
+        "lightBlue" => "ADD8E6",
+        "lightGreen" => "90EE90",
+        "lightYellow" => "FFFFE0",
+        "lightGray" | "ltGray" | "lightGrey" => "D3D3D3",
+        "darkBlue" | "dkBlue" => "00008B",
+        "darkGreen" | "dkGreen" => "006400",
+        "darkRed" | "dkRed" => "8B0000",
+        "darkGray" | "dkGray" | "darkGrey" => "A9A9A9",
+        "darkCyan" | "dkCyan" => "008B8B",
+        "darkOrange" | "dkOrange" => "FF8C00",
+        "darkMagenta" | "dkMagenta" => "8B008B",
+        "violet" => "EE82EE",
+        "indigo" => "4B0082",
+        "cornflowerBlue" => "6495ED",
+        "chocolate" => "D2691E",
+        "crimson" => "DC143C",
+        "salmon" => "FA8072",
+        _ => "000000",
+    }
 }
 
 /// Apply OOXML color modifiers (`tint`/`shade`/`lumMod`/`lumOff`/`satMod`)
@@ -1593,9 +1939,12 @@ fn text_content(
             None
         }
     });
-    // Text insets: absent attributes mean the OOXML default 0.1" (91440 EMU).
-    // Emitting explicit margins makes the rebuild reproduce the source box
-    // exactly, while kimi decks keep their explicit zero insets.
+    // Text insets: OOXML defaults when the attribute is absent are
+    // lIns/rIns = 91440 EMU (7.2px) and tIns/bIns = 45720 EMU (3.6px).
+    // Using 7.2 for all pushed text ~3.6px too low on boxes with an
+    // empty `<a:bodyPr/>` (e.g. slide-3 label boxes 应用背景/行业痛点).
+    // Emitting explicit margins makes the rebuild reproduce the source
+    // box exactly, while kimi decks keep their explicit zero insets.
     let insets = |key: &str| -> Option<f64> {
         body_pr
             .and_then(|b| attr(b, key))
@@ -1603,10 +1952,10 @@ fn text_content(
             .map(|v| px(v as f64))
     };
     let (margin_top, margin_left, margin_right, margin_bottom) = (
-        insets("tIns").or(Some(7.2)),
+        insets("tIns").or(Some(3.6)),
         insets("lIns").or(Some(7.2)),
         insets("rIns").or(Some(7.2)),
-        insets("bIns").or(Some(7.2)),
+        insets("bIns").or(Some(3.6)),
     );
 
     let paragraphs: Vec<&XmlEl> = children(tx_body, "p");
@@ -1877,12 +2226,26 @@ fn text_content(
         autofit,
         text_direction,
         wrap,
-        align: align.map(|h| Alignment {
-            horizontal: h,
-            vertical: anchor.unwrap_or_default(),
-        }),
+        align: match (align, anchor) {
+            // A paragraph with no explicit `algn` still inherits the box's
+            // vertical anchor; keep `align` set whenever the vertical
+            // anchor is explicit so it isn't dropped back to Top.
+            (Some(h), v) => Some(Alignment {
+                horizontal: h,
+                vertical: v.unwrap_or_default(),
+            }),
+            (None, Some(v)) => Some(Alignment {
+                horizontal: HorizontalAlign::default(),
+                vertical: v,
+            }),
+            (None, None) => None,
+        },
         gradient: None,
         shadow: None,
+        bullet_char: None,
+        bullet_font: None,
+        list_margin: None,
+        list_indent: None,
     })
 }
 

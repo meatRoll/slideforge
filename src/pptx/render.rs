@@ -145,7 +145,18 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
         LineStyle::Dot => "dot",
     });
     xml.start("a:ln", &[("w", &width)]);
-    if let Some(color) = &border.color {
+    if let Some(grad) = &border.gradient {
+        fill_xml(
+            xml,
+            theme,
+            &Fill::Gradient {
+                gradient_type: grad.gradient_type,
+                stops: grad.stops.clone(),
+                angle: grad.angle,
+            },
+            None,
+        )?;
+    } else if let Some(color) = &border.color {
         let resolved = resolve_color(theme, color)?;
         emit_fill_color(xml, &resolved);
     } else {
@@ -253,6 +264,14 @@ pub struct EffTextStyle {
     pub margin_right: Option<f64>,
     pub margin_bottom: Option<f64>,
     pub autofit: Option<TextAutofit>,
+    /// List bullet glyph (e.g. `•`); `None` → no bullet.
+    pub bullet_char: Option<String>,
+    /// Bullet typeface (e.g. `Arial`).
+    pub bullet_font: Option<String>,
+    /// Paragraph left margin (`marL`) in px.
+    pub list_margin: Option<f64>,
+    /// Hanging indent in px (negative).
+    pub list_indent: Option<f64>,
 }
 
 pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> EffTextStyle {
@@ -286,6 +305,40 @@ pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> Eff
         margin_right: content.margin_right,
         margin_bottom: content.margin_bottom,
         autofit: content.autofit,
+        bullet_char: content.bullet_char.clone(),
+        bullet_font: content.bullet_font.clone(),
+        list_margin: content.list_margin,
+        list_indent: content.list_indent,
+    }
+}
+
+/// Open `<a:pPr>` with `algn` plus the box-level `marL`/`indent` (the list
+/// bullet's hanging indent) when the text box carries bullets.
+fn ppr_open(xml: &mut Xml, algn: &str, style: &EffTextStyle) {
+    let mar = style.list_margin.map(|v| emu(v).to_string());
+    let ind = style.list_indent.map(|v| emu(v).to_string());
+    let mut attrs: Vec<(&str, &str)> = vec![("algn", algn)];
+    if let Some(m) = &mar {
+        attrs.push(("marL", m));
+    }
+    if let Some(i) = &ind {
+        attrs.push(("indent", i));
+    }
+    xml.start("a:pPr", &attrs);
+}
+
+/// Emit the bullet glyph (`<a:buFont>` + `<a:buChar>`) when the box is a
+/// bulleted list. Schema order: after `a:lnSpc`/`a:spcBef`, before
+/// `a:defRPr`.
+fn emit_bullet(xml: &mut Xml, style: &EffTextStyle) {
+    if style.bullet_char.is_none() {
+        return;
+    }
+    if let Some(tf) = &style.bullet_font {
+        xml.leaf("a:buFont", &[("typeface", tf)]);
+    }
+    if let Some(ch) = &style.bullet_char {
+        xml.leaf("a:buChar", &[("char", ch)]);
     }
 }
 
@@ -317,8 +370,16 @@ fn render_text(
     xml.start("a:prstGeom", &[("prst", "rect")]);
     xml.leaf("a:avLst", &[]);
     xml.end("a:prstGeom");
-    // Text boxes must not inherit the automatic shape fill (kimi parity).
-    xml.leaf("a:noFill", &[]);
+    // A text box may carry its own background fill + outline (a coloured
+    // card behind the text). Without an explicit fill, emit noFill so the
+    // box does not inherit the automatic shape fill (kimi parity).
+    match &text.fill {
+        Some(fill) => fill_xml(xml, ctx.theme, fill, text.common.opacity)?,
+        None => xml.leaf("a:noFill", &[]),
+    }
+    if let Some(border) = &text.border {
+        border_xml(xml, ctx.theme, border)?;
+    }
     xml.end("p:spPr");
 
     let anchor = match style
@@ -394,7 +455,7 @@ fn render_text(
 
         // Kimi emits paragraph properties for every paragraph: explicit
         // alignment plus the renderer's default 120% line spacing.
-        xml.start("a:pPr", &[("algn", algn)]);
+        ppr_open(xml, algn, &style);
         if let Some(pct) = line_height_pct {
             xml.start("a:lnSpc", &[]);
             xml.leaf("a:spcPct", &[("val", &pct)]);
@@ -408,6 +469,7 @@ fn render_text(
             xml.leaf("a:spcPct", &[("val", "120000")]);
             xml.end("a:lnSpc");
         }
+        emit_bullet(xml, &style);
         xml.end("a:pPr");
 
         emit_run(xml, ctx.theme, &style, line);
@@ -734,7 +796,7 @@ fn render_rich_body(
             .or(style.line_height_px)
             .map(|px| ((px * 100.0).round() as u64).to_string());
 
-        xml.start("a:pPr", &[("algn", algn)]);
+        ppr_open(xml, algn, style);
         // Empty (spacer) paragraphs carry no line spacing — matching Office,
         // whose empty `<a:p>` renders a much shorter blank line than an
         // explicit lnSpc at the box font would.
@@ -759,6 +821,7 @@ fn render_rich_body(
             xml.leaf("a:spcPts", &[("val", &pts)]);
             xml.end("a:spcBef");
         }
+        emit_bullet(xml, style);
         xml.end("a:pPr");
 
         for run in &para.runs {
