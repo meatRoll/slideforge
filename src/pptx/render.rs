@@ -364,9 +364,10 @@ fn shadow_xml(xml: &mut Xml, theme: Option<&Theme>, shadow: &Shadow) -> Result<(
         attrs.push(("sy", scale_s.as_str()));
         attrs.push(("algn", "ctr"));
     }
-    xml.start("a:outerShdw", &attrs);
+    let tag = if shadow.inner.unwrap_or(false) { "a:innerShdw" } else { "a:outerShdw" };
+    xml.start(tag, &attrs);
     srgb(xml, &resolved.rgb, resolved.alpha);
-    xml.end("a:outerShdw");
+    xml.end(tag);
     xml.end("a:effectLst");
     Ok(())
 }

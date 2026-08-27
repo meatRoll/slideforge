@@ -183,6 +183,10 @@ pub struct Shadow {
     /// > 1.0 the shadow peeks out beyond the shape edge (a centered halo).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
+    /// SlideForge extension: an inner shadow (`a:innerShdw`) renders inside
+    /// the shape bounds (inset) instead of outside (`a:outerShdw`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner: Option<bool>,
 }
 
 /// One stop of a gradient, with `position` in `[0, 1]`.

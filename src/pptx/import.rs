@@ -1389,10 +1389,12 @@ fn map_sp(
         ctx.skip(&name, "shape with neither prstGeom nor custGeom");
     }
 
-    // Drop invisible leftovers (no fill, no border, no text). Such a shape
-    // contributes nothing to the paint order, so deleting it is lossless.
+    // Drop invisible leftovers (no fill, no border, no shadow, no text).
+    // Such a shape contributes nothing to the paint order, so deleting it is
+    // lossless. A shadowed shape (outer or inner) is kept — the effect is
+    // visible even without a fill/border.
     if let Some(Element::Shape(shape)) = &element {
-        if shape.fill.is_none() && shape.border.is_none() {
+        if shape.fill.is_none() && shape.border.is_none() && shape.shadow.is_none() {
             let _ = shape;
             return Ok(None);
         }
@@ -1463,7 +1465,11 @@ fn solid_fill(sp_pr: &XmlEl, slots: &SlotColors) -> Option<Fill> {
 fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
     let sp_pr = sp_pr?;
     let effects = first(sp_pr, "effectLst")?;
-    let shdw = first(effects, "outerShdw")?;
+    // Prefer outerShdw; fall back to innerShdw (renders inside the shape).
+    let (shdw, inner) = match first(effects, "outerShdw") {
+        Some(s) => (s, false),
+        None => (first(effects, "innerShdw")?, true),
+    };
     let blur = attr(shdw, "blurRad")
         .and_then(|s| s.parse::<f64>().ok())
         .map(|v| px(v))
@@ -1488,7 +1494,8 @@ fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
         .and_then(|s| s.parse::<f64>().ok())
         .map(|v| v / 100000.0)
         .filter(|&v| (v - 1.0).abs() > 1e-6);
-    Some(Shadow { blur, color, offset, scale })
+    let inner = if inner { Some(true) } else { None };
+    Some(Shadow { blur, color, offset, scale, inner })
 }
 
 fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
