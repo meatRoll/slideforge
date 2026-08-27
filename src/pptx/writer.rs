@@ -348,9 +348,7 @@ impl<'a> PptxWriter<'a> {
         }
         x.start("p:spTree", &[]);
         group_prolog(&mut x);
-        for element in &page.elements {
-            render::render_element(&mut x, ctx, element, index - 1)?;
-        }
+        render::render_sp_tree(&mut x, ctx, &page.elements, page.groups.as_ref(), index - 1)?;
         x.end("p:spTree");
         x.end("p:cSld");
         x.start("p:clrMapOvr", &[]);
@@ -596,9 +594,7 @@ fn layout_xml(
     }
     x.start("p:spTree", &[]);
     group_prolog(&mut x);
-    for element in &def.elements {
-        render::render_element(&mut x, ctx, element, 0)?;
-    }
+    render::render_sp_tree(&mut x, ctx, &def.elements, def.groups.as_ref(), 0)?;
     x.end("p:spTree");
     x.end("p:cSld");
     x.start("p:clrMapOvr", &[]);

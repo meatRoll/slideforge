@@ -2,13 +2,16 @@
 //!
 //! Supported: `text`, `shape`, `line`, `icon` (Font Awesome glyphs as custom
 //! geometry) and `image` (blip media parts). Unsupported (`table`, `chart`)
-//! fail with an explicit [`Error::Unsupported`]; shape shadows are currently
-//! dropped silently (documented limitation).
+//! fail with an explicit [`Error::Unsupported`]. Shape drop shadows
+//! (`a:effectLst > a:outerShdw`, incl. `sx`/`sy` scale + `algn`) and
+//! `<p:grpSp>` group reconstruction (SlideForge group extension) are
+//! supported.
 
 use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientType, HorizontalAlign,
     ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
+use crate::pptd::elements::{GroupDef, GroupXfrm};
 use crate::pptd::{
     Element, Icon, Image, Line, LineCurve, Shape, Text, TextAutofit, TextContent, TextDirection,
     Theme,
@@ -81,6 +84,158 @@ pub fn render_element(
             other.type_name(),
             page_index + 1
         ))),
+    }
+}
+
+/// Render a flat `elements` array into a `p:spTree`, reconstructing
+/// `<p:grpSp>` groups from the SlideForge group extension (`groupId` +
+/// `groupBounds` on members, `Page.groups` metadata). Elements without a
+/// `groupId` render inline (slide-space `bounds`); grouped members render
+/// inside the rebuilt group with their child-space `groupBounds`.
+pub fn render_sp_tree(
+    xml: &mut Xml,
+    ctx: &mut RenderCtx<'_>,
+    elements: &[Element],
+    groups: Option<&std::collections::HashMap<String, GroupDef>>,
+    page_index: usize,
+) -> Result<()> {
+    let mut i = 0;
+    while i < elements.len() {
+        match elements[i].common().group_id.as_deref() {
+            None => {
+                render_element(xml, ctx, &elements[i], page_index)?;
+                i += 1;
+            }
+            Some(gid) => {
+                let is_top = groups
+                    .and_then(|m| m.get(gid))
+                    .map(|g| g.parent.is_none())
+                    .unwrap_or(false);
+                if !is_top {
+                    // Orphan (parent group not preserved): fall back to flat.
+                    render_element(xml, ctx, &elements[i], page_index)?;
+                    i += 1;
+                    continue;
+                }
+                let end = group_span_end(elements, groups, i, gid);
+                render_group(xml, ctx, elements, groups, i, end, gid, page_index)?;
+                i = end;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Emit a `<p:grpSp>` over `elements[start..end)` (members + nested groups).
+fn render_group(
+    xml: &mut Xml,
+    ctx: &mut RenderCtx<'_>,
+    elements: &[Element],
+    groups: Option<&std::collections::HashMap<String, GroupDef>>,
+    start: usize,
+    end: usize,
+    gid: &str,
+    page_index: usize,
+) -> Result<()> {
+    let def = groups
+        .and_then(|m| m.get(gid))
+        .expect("group metadata for member element");
+    let id = ctx.next_id().to_string();
+    let name = def.name.clone().unwrap_or_else(|| format!("Group {gid}"));
+    xml.start("p:grpSp", &[]);
+    xml.start("p:nvGrpSpPr", &[]);
+    xml.start("p:cNvPr", &[("id", &id), ("name", &name)]);
+    xml.end("p:cNvPr");
+    xml.leaf("p:cNvGrpSpPr", &[]);
+    xml.leaf("p:nvPr", &[]);
+    xml.end("p:nvGrpSpPr");
+    xml.start("p:grpSpPr", &[]);
+    group_xfrm(xml, &def.xfrm);
+    xml.end("p:grpSpPr");
+    let mut i = start;
+    while i < end {
+        match elements[i].common().group_id.as_deref() {
+            Some(child_gid) if child_gid == gid => {
+                // Direct leaf: swap in child-space `groupBounds`.
+                let mut child = elements[i].clone();
+                if let Some(gb) = child.common().group_bounds {
+                    child.common_mut().bounds = gb;
+                }
+                render_element(xml, ctx, &child, page_index)?;
+                i += 1;
+            }
+            Some(child_gid) => {
+                // Nested group (child_gid's parent is this group).
+                let nested_end = group_span_end(elements, groups, i, child_gid);
+                render_group(xml, ctx, elements, groups, i, nested_end, child_gid, page_index)?;
+                i = nested_end;
+            }
+            None => {
+                render_element(xml, ctx, &elements[i], page_index)?;
+                i += 1;
+            }
+        }
+    }
+    xml.end("p:grpSp");
+    Ok(())
+}
+
+/// A group `<a:xfrm>` (off/ext/chOff/chExt + rot/flip), px → EMU.
+fn group_xfrm(xml: &mut Xml, x: &GroupXfrm) {
+    let off_x = emu(x.off.0).to_string();
+    let off_y = emu(x.off.1).to_string();
+    let ext_cx = emu(x.ext.0).to_string();
+    let ext_cy = emu(x.ext.1).to_string();
+    let cho_x = emu(x.ch_off.0).to_string();
+    let cho_y = emu(x.ch_off.1).to_string();
+    let che_cx = emu(x.ch_ext.0).to_string();
+    let che_cy = emu(x.ch_ext.1).to_string();
+    let rot = x.rot.filter(|d| d.abs() > 1e-9).map(|d| ((d * 60000.0).round()).to_string());
+    let (fh, fv) = x.flip.unwrap_or((false, false));
+    let mut attrs: Vec<(&str, &str)> = Vec::new();
+    if let Some(r) = rot.as_deref() { attrs.push(("rot", r)); }
+    if fh { attrs.push(("flipH", "1")); }
+    if fv { attrs.push(("flipV", "1")); }
+    xml.start("a:xfrm", &attrs);
+    xml.leaf("a:off", &[("x", &off_x), ("y", &off_y)]);
+    xml.leaf("a:ext", &[("cx", &ext_cx), ("cy", &ext_cy)]);
+    xml.leaf("a:chOff", &[("x", &cho_x), ("y", &cho_y)]);
+    xml.leaf("a:chExt", &[("cx", &che_cx), ("cy", &che_cy)]);
+    xml.end("a:xfrm");
+}
+
+/// End index (exclusive) of the run of elements belonging to `gid` or its
+/// descendants, starting at `start`.
+fn group_span_end(
+    elements: &[Element],
+    groups: Option<&std::collections::HashMap<String, GroupDef>>,
+    start: usize,
+    gid: &str,
+) -> usize {
+    let mut j = start;
+    while j < elements.len() {
+        match elements[j].common().group_id.as_deref() {
+            Some(id) if id == gid || is_descendant(groups, id, gid) => j += 1,
+            _ => break,
+        }
+    }
+    j
+}
+
+/// Is `id` a (transitive) child group of `ancestor`?
+fn is_descendant(
+    groups: Option<&std::collections::HashMap<String, GroupDef>>,
+    id: &str,
+    ancestor: &str,
+) -> bool {
+    let g = match groups.and_then(|m| m.get(id)) {
+        Some(g) => g,
+        None => return false,
+    };
+    match &g.parent {
+        Some(p) if p == ancestor => true,
+        Some(p) => is_descendant(groups, p, ancestor),
+        None => false,
     }
 }
 

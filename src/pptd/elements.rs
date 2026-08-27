@@ -32,6 +32,17 @@ pub struct ElementCommon {
     /// `[horizontal flip, vertical flip]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip: Option<(bool, bool)>,
+    /// SlideForge extension: id of the `<p:grpSp>` group this element
+    /// belongs to (membership is recorded so the writer can reconstruct the
+    /// group — preserving WPS's group selection box). The element stays in
+    /// the flat `elements` array; `bounds` remains slide-space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// SlideForge extension: the element's `a:xfrm` in the **group's child
+    /// space** (`[off.x, off.y, ext.cx, ext.cy]`), emitted verbatim inside
+    /// the reconstructed `<p:grpSp>`. Only meaningful with `groupId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_bounds: Option<Bounds>,
 }
 
 /// Any element on a page, discriminated by the `elementType` field:
@@ -96,6 +107,33 @@ impl Element {
             Element::Icon(e) => e.common.opacity,
             Element::Table(e) => e.common.opacity,
             Element::Chart(e) => e.common.opacity,
+        }
+    }
+
+    /// Borrow the common fields (id/bounds/rotation/flip/groupId/groupBounds).
+    pub fn common(&self) -> &ElementCommon {
+        match self {
+            Element::Text(e) => &e.common,
+            Element::Shape(e) => &e.common,
+            Element::Line(e) => &e.common,
+            Element::Image(e) => &e.common,
+            Element::Icon(e) => &e.common,
+            Element::Table(e) => &e.common,
+            Element::Chart(e) => &e.common,
+        }
+    }
+
+    /// Mutably borrow the common fields (used by the writer to swap in
+    /// `groupBounds` when emitting inside a reconstructed `<p:grpSp>`).
+    pub fn common_mut(&mut self) -> &mut ElementCommon {
+        match self {
+            Element::Text(e) => &mut e.common,
+            Element::Shape(e) => &mut e.common,
+            Element::Line(e) => &mut e.common,
+            Element::Image(e) => &mut e.common,
+            Element::Icon(e) => &mut e.common,
+            Element::Table(e) => &mut e.common,
+            Element::Chart(e) => &mut e.common,
         }
     }
 }
@@ -386,4 +424,47 @@ pub struct Table {
     pub fill: Option<Fill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+}
+
+// ---------------------------------------------------------------------------
+// SlideForge group extension (flat PPTD + reconstructed `<p:grpSp>).
+// ---------------------------------------------------------------------------
+
+/// A reconstructed `<p:grpSp>` group. Stored in [`crate::pptd::ast::Page::groups`];
+/// member elements carry `groupId` + `groupBounds` (child-space) on
+/// [`ElementCommon`]. The PPTD stays flat; the writer rebuilds the nesting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupDef {
+    /// The group's raw OOXML transform (slide-space `off`/`ext` + child-space
+    /// `chOff`/`chExt`), emitted verbatim as `<a:xfrm>`.
+    pub xfrm: GroupXfrm,
+    /// The original `p:cNvPr name` (e.g. `组合 22`); falls back to a generic
+    /// name at write time when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Parent group id for nested groups; `None` for a top-level group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+/// A group `<a:xfrm>`: slide-space offset/extent + child-space offset/extent,
+/// all in px (the writer converts to EMU). `rot`/`flip` apply to the group box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupXfrm {
+    /// Slide-space offset `[x, y]`.
+    pub off: (f64, f64),
+    /// Slide-space extent `[cx, cy]`.
+    pub ext: (f64, f64),
+    /// Child-space offset `[x, y]`.
+    pub ch_off: (f64, f64),
+    /// Child-space extent `[cx, cy]`.
+    pub ch_ext: (f64, f64),
+    /// Clockwise rotation in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rot: Option<f64>,
+    /// `[horizontal flip, vertical flip]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip: Option<(bool, bool)>,
 }

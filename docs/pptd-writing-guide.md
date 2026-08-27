@@ -8,6 +8,8 @@
 > **规范语义**见 [`docs/pptd-spec.md`](./pptd-spec.md)（Moonshot PPTD v2 的本仓库只读镜像）；
 > **SlideForge 的 layouts 扩展**见 [`docs/pptd-layout-extension.md`](./pptd-layout-extension.md)
 > （`Presentation.layouts` / `Page.layout` / `Text.placeholder`，可选、向后兼容）。
+> **SlideForge 的 group 扩展**见 [`docs/pptd-group-extension.md`](./pptd-group-extension.md)
+> （`ElementCommon.groupId`/`groupBounds` + `Page.groups`，扁平形式不变、writer 重建 `<p:grpSp>`，保留 WPS 组合选择框）。
 > 两份文档是 AI 编辑 PPTD 时的权威参考。Moonshot 的参考资料在「形状库 / 字体库 /
 > 设计系统 / 场景分类」上更完整，写作时互补。
 

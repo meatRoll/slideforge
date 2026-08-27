@@ -76,6 +76,25 @@ fn validate_page(project: &Project, page_idx: usize, page: &Page, out: &mut Vec<
     // TODO(P2): once convert sets `Text.placeholder`, check it resolves against
     // the page's layout placeholders (needs the layout context plumbed in).
 
+    // SlideForge group extension: every `groupId` on an element must
+    // resolve to an entry in `Page.groups`.
+    for element in &page.elements {
+        if let Some(gid) = element.common().group_id.as_deref() {
+            let resolved = page.groups.as_ref().is_some_and(|m| m.contains_key(gid));
+            if !resolved {
+                diag(
+                    out,
+                    page_idx,
+                    format!(
+                        "element `{}` references groupId `{}` not defined in page.groups",
+                        element.element_id(),
+                        gid
+                    ),
+                );
+            }
+        }
+    }
+
     let mut ids: HashSet<&str> = HashSet::new();
     for element in &page.elements {
         let element_id = element.element_id();

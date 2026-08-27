@@ -35,6 +35,10 @@ pub struct LayoutDef {
     /// type (`title`, `body`, `subTitle`, `dt` …).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub placeholders: HashMap<String, PlaceholderDef>,
+    /// SlideForge group extension: reconstructed `<p:grpSp>` metadata for the
+    /// layout's decorative elements (see [`crate::pptd::elements::GroupDef`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<HashMap<String, crate::pptd::elements::GroupDef>>,
 }
 
 /// Geometry + default run-style a slide placeholder of the same `type`

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::animation::Animation;
-use super::elements::Element;
+use super::elements::{Element, GroupDef};
 use super::layout::LayoutDef;
 use super::shared::{Fill, Size};
 use super::theme::{CustomFont, Theme};
@@ -62,4 +62,10 @@ pub struct Page {
     /// Optional animation orchestrations referencing `elements[].element_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animations: Option<Vec<Animation>>,
+    /// SlideForge extension: reconstructed `<p:grpSp>` group metadata keyed by
+    /// id. Member elements carry `groupId` + `groupBounds` (child-space) on
+    /// [`ElementCommon`]; the PPTD `elements` array stays flat (slide-space
+    /// `bounds`), and the writer rebuilds the nesting on output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<HashMap<String, GroupDef>>,
 }

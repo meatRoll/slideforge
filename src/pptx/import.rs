@@ -31,8 +31,8 @@ use xmltree::Element as XmlEl;
 
 use crate::pptd::ast::{Page, Presentation};
 use crate::pptd::elements::{
-    Element, ElementCommon, Icon, Image, Line, Shape, Text, TextAutofit, TextContent,
-    TextDirection,
+    Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Shape, Text,
+    TextAutofit, TextContent, TextDirection,
 };
 use crate::pptd::layout::{LayoutDef, PlaceholderDef};
 use crate::pptd::shared::{
@@ -200,6 +200,8 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
             skipped: &mut skipped,
             fallback_bg: lfbg,
             layout_key: layout_field.clone(),
+            groups: HashMap::new(),
+            group_seq: 0,
         };
         let page = extract_slide(&slide, part, &mut zip, &mut ctx, &rels)?;
         element_count += page.elements.len();
@@ -291,6 +293,11 @@ struct PageCtx<'a> {
     /// SlideForge extension key this slide's page will reference
     /// (`Presentation.layouts[key]`); set from the resolved layout.
     layout_key: Option<String>,
+    /// SlideForge group extension: reconstructed `<p:grpSp>` metadata,
+    /// keyed by group id. Member elements carry `groupId` + `groupBounds`.
+    groups: HashMap<String, crate::pptd::elements::GroupDef>,
+    /// Monotonic group-id counter (per page).
+    group_seq: u32,
 }
 
 impl<'a> PageCtx<'a> {
@@ -300,6 +307,13 @@ impl<'a> PageCtx<'a> {
             name: name.to_string(),
             reason: reason.into(),
         });
+    }
+
+    /// Next group id for the SlideForge group extension
+    /// (`grp1`, `grp2`, …; unique within the page).
+    fn next_group_id(&mut self) -> String {
+        self.group_seq += 1;
+        format!("grp{}", self.group_seq)
     }
 
     /// Unique element id derived from the drawing name.
@@ -683,6 +697,7 @@ fn build_layout(
 
     let mut elements = Vec::new();
     let protos: BTreeMap<PhKey, PlaceholderProto>;
+    let groups: HashMap<String, crate::pptd::elements::GroupDef>;
     {
         let mut lctx = PageCtx {
             page_no: 0,
@@ -695,6 +710,8 @@ fn build_layout(
             skipped,
             fallback_bg: fallback_bg.clone(),
             layout_key: None,
+            groups: HashMap::new(),
+            group_seq: 0,
         };
         // Master decorative shapes + placeholders (master inherits to
         // every slide via this layout).
@@ -704,7 +721,7 @@ fn build_layout(
                     let master_rels = layout_rels(zip, master);
                     for child in tree.children.iter().filter_map(|n| n.as_element()) {
                         let mut generated = Vec::new();
-                        walk_sp_tree_child(child, &master_rels, &mut lctx, None, true, &mut generated)?;
+                        walk_sp_tree_child(child, &master_rels, &mut lctx, None, None, true, &mut generated)?;
                         elements.extend(generated.into_iter().flatten());
                     }
                 }
@@ -716,13 +733,20 @@ fn build_layout(
                 let layout_rels = layout_rels(zip, layout_part);
                 for child in tree.children.iter().filter_map(|n| n.as_element()) {
                     let mut generated = Vec::new();
-                    walk_sp_tree_child(child, &layout_rels, &mut lctx, None, true, &mut generated)?;
+                    walk_sp_tree_child(child, &layout_rels, &mut lctx, None, None, true, &mut generated)?;
                     elements.extend(generated.into_iter().flatten());
                 }
             }
         }
         protos = std::mem::take(&mut lctx.layout_placeholders);
+        groups = std::mem::take(&mut lctx.groups);
     }
+
+    let groups = if groups.is_empty() {
+        None
+    } else {
+        Some(groups)
+    };
 
     // Layout background: the layout's own <p:bg>, else the master's.
     let background = parse_part(zip, layout_part)
@@ -741,6 +765,7 @@ fn build_layout(
             background,
             elements,
             placeholders,
+            groups,
         },
         protos,
         defaults,
@@ -914,7 +939,7 @@ fn extract_slide(
     let mut elements = Vec::new();
     for child in sp_tree.children.iter().filter_map(|n| n.as_element()) {
         let mut generated = Vec::new();
-        walk_sp_tree_child(child, rels, ctx, None, false, &mut generated)?;
+        walk_sp_tree_child(child, rels, ctx, None, None, false, &mut generated)?;
         elements.extend(generated.into_iter().flatten());
     }
 
@@ -925,6 +950,7 @@ fn extract_slide(
         notes: None,
         elements,
         animations: None,
+        groups: if ctx.groups.is_empty() { None } else { Some(std::mem::take(&mut ctx.groups)) },
     })
 }
 
@@ -947,6 +973,7 @@ fn walk_sp_tree_child(
     rels: &BTreeMap<String, String>,
     ctx: &mut PageCtx<'_>,
     group: Option<&Xform>,
+    group_id: Option<&str>,
     in_layout: bool,
     out: &mut Vec<Option<Element>>,
 ) -> Result<()> {
@@ -955,7 +982,7 @@ fn walk_sp_tree_child(
         "pic" => out.push(map_pic(el, rels, ctx, group)),
         "cxnSp" => out.push(map_line(el, ctx, group)),
         "grpSp" => {
-            flatten_group(el, rels, ctx, group, in_layout, out)?;
+            flatten_group(el, rels, ctx, group, group_id, in_layout, out)?;
         }
         "graphicFrame" => {
             let name = cnv_name(el).unwrap_or_else(|| "graphicFrame".into());
@@ -988,6 +1015,7 @@ fn flatten_group(
     rels: &BTreeMap<String, String>,
     ctx: &mut PageCtx<'_>,
     outer: Option<&Xform>,
+    parent_id: Option<&str>,
     in_layout: bool,
     out: &mut Vec<Option<Element>>,
 ) -> Result<()> {
@@ -1012,18 +1040,53 @@ fn flatten_group(
         return Ok(());
     }
     let g = raw.apply(outer);
-    if let Some(rot) = g.rot {
-        if rot.abs() > 1e-9 {
-            ctx.skip(cnv_name(el).unwrap_or_else(|| "grpSp".into()).as_str(), "rotated groups are not supported");
-            return Ok(());
-        }
-    }
+    // SlideForge group extension: register the group (RAW xfrm, verbatim) so
+    // the writer can rebuild the `<p:grpSp>` — preserving WPS's group
+    // selection box. `bounds` on member elements stays slide-space; the
+    // writer swaps in `groupBounds` (child-space) inside the group.
+    let group_id = ctx.next_group_id();
+    ctx.groups.insert(
+        group_id.clone(),
+        GroupDef {
+            xfrm: GroupXfrm {
+                off: (px(raw.off.0), px(raw.off.1)),
+                ext: (px(raw.ext.0), px(raw.ext.1)),
+                ch_off: (px(raw.ch_off.0), px(raw.ch_off.1)),
+                ch_ext: (px(raw.ch_ext.0), px(raw.ch_ext.1)),
+                rot: raw.rot,
+                flip: raw.flip.filter(|(h, v)| *h || *v),
+            },
+            name: cnv_name(el),
+            parent: parent_id.map(str::to_owned),
+        },
+    );
     for child in el.children.iter().filter_map(|n| n.as_element()) {
         match child.name.as_str() {
             "nvGrpSpPr" | "grpSpPr" => continue,
-            _ => {}
+            "grpSp" => {
+                // Nested group: recurse; it registers itself and tags its
+                // own children. Its `parent` is this group's id.
+                flatten_group(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+            }
+            _ => {
+                // Leaf: dispatch (applies the composed xfrm → slide-space
+                // `bounds`), then tag with this group's id + the child's RAW
+                // (child-space) xfrm as `groupBounds`.
+                let before = out.len();
+                walk_sp_tree_child(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+                for slot in &mut out[before..] {
+                    if let Some(elem) = slot {
+                        elem.common_mut().group_id = Some(group_id.clone());
+                        if let Some(sp_pr) = first(child, "spPr") {
+                            if let Some(xel) = first(sp_pr, "xfrm") {
+                                elem.common_mut().group_bounds =
+                                    Some(to_bounds(&Xform::parse(xel)));
+                            }
+                        }
+                    }
+                }
+            }
         }
-        walk_sp_tree_child(child, rels, ctx, Some(&g), in_layout, out)?;
     }
     Ok(())
 }
@@ -1115,6 +1178,8 @@ fn common(x: &Xform, id: String) -> ElementCommon {
         rotation: x.rot,
         opacity: None,
         flip: x.flip.filter(|(h, v)| *h || *v),
+        group_id: None,
+        group_bounds: None,
     }
 }
 
