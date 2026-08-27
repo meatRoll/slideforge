@@ -50,7 +50,10 @@ pub struct ElementCommon {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "elementType", rename_all = "snake_case")]
 pub enum Element {
-    Text(Text),
+    // `Text` is boxed for the same reason as `Chart` below: keeping
+    // `TextContent`'s ~20 optional fields inline inflates every other
+    // variant by `size_of::<Text> - size_of::<largest_other>`.
+    Text(Box<Text>),
     Shape(Shape),
     Line(Line),
     Image(Image),

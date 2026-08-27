@@ -127,6 +127,11 @@ pub fn render_sp_tree(
 }
 
 /// Emit a `<p:grpSp>` over `elements[start..end)` (members + nested groups).
+// 8 args because each one names a different axis of the OOXML group model
+// (the body, the surrounding context, the member range, the group metadata,
+// and the page). Bundling them into a struct would lose the per-axis
+// semantics at every call site.
+#[allow(clippy::too_many_arguments)]
 fn render_group(
     xml: &mut Xml,
     ctx: &mut RenderCtx<'_>,
@@ -315,7 +320,7 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
     // the segment gradient bounding box.
     let width_attr: Option<String> = border
         .width
-        .filter(|w| border.color.is_some() || border.gradient.is_some())
+        .filter(|_| border.color.is_some() || border.gradient.is_some())
         .map(|w| emu(w).to_string());
     let dash: Option<&str> = border.style.map(|style| match style {
         LineStyle::Solid => "solid",

@@ -1280,6 +1280,7 @@ fn walk_sp_tree_child(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flatten_group(
     el: &XmlEl,
     rels: &BTreeMap<String, String>,
@@ -1333,23 +1334,21 @@ fn flatten_group(
                 _ => {
                     let before = out.len();
                     walk_sp_tree_child(child, rels, ctx, outer, parent_id, in_layout, out)?;
-                    for slot in &mut out[before..] {
-                        if let Some(elem) = slot {
-                            if let Some(parent) = parent_id {
-                                elem.common_mut().group_id = Some(parent.to_owned());
-                                if let Some(sp_pr) = first(child, "spPr") {
-                                    if let Some(xel) = first(sp_pr, "xfrm") {
-                                        elem.common_mut().group_bounds =
-                                            Some(to_bounds(&Xform::parse(xel)));
-                                    }
+                    for elem in out[before..].iter_mut().flatten() {
+                        if let Some(parent) = parent_id {
+                            elem.common_mut().group_id = Some(parent.to_owned());
+                            if let Some(sp_pr) = first(child, "spPr") {
+                                if let Some(xel) = first(sp_pr, "xfrm") {
+                                    elem.common_mut().group_bounds =
+                                        Some(to_bounds(&Xform::parse(xel)));
                                 }
                             }
-                            if let Some(sp_pr) = first(child, "spPr") {
-                                if first(sp_pr, "grpFill").is_some() {
-                                    if let Element::Shape(shape) = elem {
-                                        if shape.fill.is_none() {
-                                            shape.fill = group_fill.clone();
-                                        }
+                        }
+                        if let Some(sp_pr) = first(child, "spPr") {
+                            if first(sp_pr, "grpFill").is_some() {
+                                if let Element::Shape(shape) = elem {
+                                    if shape.fill.is_none() {
+                                        shape.fill = group_fill.clone();
                                     }
                                 }
                             }
@@ -1421,19 +1420,17 @@ fn flatten_group(
                         in_layout,
                         out,
                     )?;
-                    for slot in &mut out[before..] {
-                        if let Some(elem) = slot {
-                            elem.common_mut().group_id = Some(group_id.clone());
-                            if let Some(sp_pr) = first(child, "spPr") {
-                                if let Some(xel) = first(sp_pr, "xfrm") {
-                                    elem.common_mut().group_bounds =
-                                        Some(to_bounds(&Xform::parse(xel)));
-                                }
-                                if first(sp_pr, "grpFill").is_some() {
-                                    if let Element::Shape(shape) = elem {
-                                        if shape.fill.is_none() {
-                                            shape.fill = group_fill.clone();
-                                        }
+                    for elem in out[before..].iter_mut().flatten() {
+                        elem.common_mut().group_id = Some(group_id.clone());
+                        if let Some(sp_pr) = first(child, "spPr") {
+                            if let Some(xel) = first(sp_pr, "xfrm") {
+                                elem.common_mut().group_bounds =
+                                    Some(to_bounds(&Xform::parse(xel)));
+                            }
+                            if first(sp_pr, "grpFill").is_some() {
+                                if let Element::Shape(shape) = elem {
+                                    if shape.fill.is_none() {
+                                        shape.fill = group_fill.clone();
                                     }
                                 }
                             }
@@ -1465,14 +1462,12 @@ fn flatten_group(
             _ => {
                 let before = out.len();
                 walk_sp_tree_child(child, rels, ctx, Some(&g), None, in_layout, out)?;
-                for slot in &mut out[before..] {
-                    if let Some(elem) = slot {
-                        if let Some(sp_pr) = first(child, "spPr") {
-                            if first(sp_pr, "grpFill").is_some() {
-                                if let Element::Shape(shape) = elem {
-                                    if shape.fill.is_none() {
-                                        shape.fill = group_fill.clone();
-                                    }
+                for elem in out[before..].iter_mut().flatten() {
+                    if let Some(sp_pr) = first(child, "spPr") {
+                        if first(sp_pr, "grpFill").is_some() {
+                            if let Element::Shape(shape) = elem {
+                                if shape.fill.is_none() {
+                                    shape.fill = group_fill.clone();
                                 }
                             }
                         }
@@ -1794,13 +1789,13 @@ fn map_sp(
             let placeholder = ph
                 .as_ref()
                 .map(|p| attr(p, "type").unwrap_or("body").to_string());
-            return Ok(Some(Element::Text(Text {
+            return Ok(Some(Element::Text(Box::new(Text {
                 common: common(&x, id),
                 content,
                 fill,
                 border,
                 placeholder,
-            })));
+            }))));
         }
         // Empty placeholder (e.g. an unfilled `<p:ph type="title"/>`):
         // keep it as a placeholder shape so the renderer shows the prompt
@@ -1812,13 +1807,13 @@ fn map_sp(
                 .and_then(|p| attr(p, "type"))
                 .unwrap_or("body")
                 .to_string();
-            return Ok(Some(Element::Text(Text {
+            return Ok(Some(Element::Text(Box::new(Text {
                 common: common(&x, id),
                 content: TextContent::default(),
                 fill: None,
                 border: None,
                 placeholder: Some(placeholder),
-            })));
+            }))));
         }
         // Empty text bodies: invisible padding boxes — only keep them when
         // they carry a visible fill/border of their own.
@@ -1951,7 +1946,7 @@ fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
     };
     let blur = attr(shdw, "blurRad")
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|v| px(v))
+        .map(px)
         .unwrap_or(0.0);
     let dist = attr(shdw, "dist")
         .and_then(|s| s.parse::<f64>().ok())
@@ -2806,7 +2801,7 @@ fn gradient_from(grad: &XmlEl, slots: &SlotColors) -> Option<Fill> {
         let angle = attr(lin, "ang")
             .and_then(|s| s.parse::<f64>().ok())
             .map(|a| a / 60000.0);
-        let scaled = attr(lin, "scaled").map_or(false, |v| v == "1");
+        let scaled = attr(lin, "scaled") == Some("1");
         Some(Fill::Gradient {
             gradient_type: GradientType::Linear,
             stops,
