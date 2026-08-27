@@ -7,7 +7,7 @@
 
 use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientType, HorizontalAlign,
-    ImageFitMode, LineStyle, VerticalAlign,
+    ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
 use crate::pptd::{
     Element, Icon, Image, Line, LineCurve, Shape, Text, TextAutofit, TextContent, TextDirection,
@@ -175,8 +175,41 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
     Ok(())
 }
 
-/// Fill (`solid` / `gradient` / `image`) → drawingml, optionally multiplied
-/// by an element-level opacity.
+/// `a:effectLst > a:outerShdw` from a [`Shadow`]. Emitted inside `p:spPr`
+/// after the border. `blur` → `blurRad` (EMU); `offset` → `dist`+`dir`
+/// (dir in 1/60000 deg). The colour's alpha rides on the `<a:srgbClr>`.
+fn shadow_xml(xml: &mut Xml, theme: Option<&Theme>, shadow: &Shadow) -> Result<()> {
+    let resolved = resolve_color(theme, &shadow.color)?;
+    xml.start("a:effectLst", &[]);
+    let blur = emu(shadow.blur).to_string();
+    let (dist, dir) = match shadow.offset {
+        Some((x, y)) => {
+            let d = emu((x * x + y * y).sqrt());
+            let deg = if x == 0.0 && y == 0.0 {
+                0.0
+            } else {
+                y.atan2(x).to_degrees().rem_euclid(360.0)
+            };
+            (d, (deg * 60000.0).round() as i64)
+        }
+        None => (0, 0),
+    };
+    let dist_s = dist.to_string();
+    let dir_s = dir.to_string();
+    xml.start(
+        "a:outerShdw",
+        &[
+            ("blurRad", blur.as_str()),
+            ("dist", dist_s.as_str()),
+            ("dir", dir_s.as_str()),
+            ("rotWithShape", "0"),
+        ],
+    );
+    srgb(xml, &resolved.rgb, resolved.alpha);
+    xml.end("a:outerShdw");
+    xml.end("a:effectLst");
+    Ok(())
+}
 pub fn fill_xml(
     xml: &mut Xml,
     theme: Option<&Theme>,
@@ -1025,8 +1058,9 @@ fn render_shape(xml: &mut Xml, ctx: &mut RenderCtx<'_>, shape: &Shape) -> Result
     if let Some(border) = &shape.border {
         border_xml(xml, ctx.theme, border)?;
     }
-    // TODO(shape shadow): map `Shape.shadow` to `a:effectLst > a:outerShdw`;
-    // currently dropped (documented in the module docs).
+    if let Some(shadow) = &shape.shadow {
+        shadow_xml(xml, ctx.theme, shadow)?;
+    }
     xml.end("p:spPr");
 
     // Kimi renders decorative shapes without a `p:txBody` at all; an empty

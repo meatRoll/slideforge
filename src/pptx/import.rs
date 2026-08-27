@@ -37,7 +37,7 @@ use crate::pptd::elements::{
 use crate::pptd::layout::{LayoutDef, PlaceholderDef};
 use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientFill, GradientType,
-    HorizontalAlign, ImageCrop, ImageFit, ImageFitMode, LineStyle, VerticalAlign,
+    HorizontalAlign, ImageCrop, ImageFit, ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
 use crate::pptd::theme::Theme;
 use crate::{Error, Result};
@@ -1197,7 +1197,7 @@ fn map_sp(
                 icon_name,
                 fill,
                 border: border_from_el(el, ctx.slots),
-                shadow: None,
+                shadow: shadow_from(sp_pr, ctx.slots),
             })));
         }
     }
@@ -1281,7 +1281,7 @@ fn map_sp(
                     path: Some(path),
                     fill,
                     border: border_from_el(el, ctx.slots),
-                    shadow: None,
+                    shadow: shadow_from(sp_pr, ctx.slots),
                 }));
             }
             Ok(None) => {}
@@ -1301,7 +1301,7 @@ fn map_sp(
             path: None,
             fill,
             border: border_from_el(el, ctx.slots),
-            shadow: None,
+            shadow: shadow_from(sp_pr, ctx.slots),
         }));
     } else {
         ctx.skip(&name, "shape with neither prstGeom nor custGeom");
@@ -1371,6 +1371,38 @@ fn solid_fill(sp_pr: &XmlEl, slots: &SlotColors) -> Option<Fill> {
     first(sp_pr, "solidFill")
         .and_then(|f| color_from_fill(f, slots))
         .map(|color| Fill::Solid { color })
+}
+
+/// `<p:spPr><a:effectLst><a:outerShdw …>` → [`Shadow`]. `innerShdw` and
+/// other effects are ignored. The colour (incl. `<a:alpha>`) is resolved
+/// via [`color_from_fill`]; `dist`/`dir` map to the `[x, y]` offset (px).
+/// `blurRad` → `blur` (px); the OOXML scale attrs `sx`/`sy` are not
+/// representable in the PPTD `Shadow` model and are dropped.
+fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
+    let sp_pr = sp_pr?;
+    let effects = first(sp_pr, "effectLst")?;
+    let shdw = first(effects, "outerShdw")?;
+    let blur = attr(shdw, "blurRad")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| px(v))
+        .unwrap_or(0.0);
+    let dist = attr(shdw, "dist")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let dir_deg = attr(shdw, "dir")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v / 60000.0)
+        .unwrap_or(0.0);
+    let r = dir_deg.to_radians();
+    let ox = dist * r.cos();
+    let oy = dist * r.sin();
+    let offset = if ox.abs() < 1e-6 && oy.abs() < 1e-6 {
+        None
+    } else {
+        Some((px(ox), px(oy)))
+    };
+    let color = color_from_fill(shdw, slots)?;
+    Some(Shadow { blur, color, offset })
 }
 
 fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
