@@ -196,15 +196,20 @@ fn shadow_xml(xml: &mut Xml, theme: Option<&Theme>, shadow: &Shadow) -> Result<(
     };
     let dist_s = dist.to_string();
     let dir_s = dir.to_string();
-    xml.start(
-        "a:outerShdw",
-        &[
-            ("blurRad", blur.as_str()),
-            ("dist", dist_s.as_str()),
-            ("dir", dir_s.as_str()),
-            ("rotWithShape", "0"),
-        ],
-    );
+    let mut attrs: Vec<(&str, &str)> = vec![
+        ("blurRad", blur.as_str()),
+        ("dist", dist_s.as_str()),
+        ("dir", dir_s.as_str()),
+        ("rotWithShape", "0"),
+    ];
+    let scale_s;
+    if let Some(s) = shadow.scale {
+        scale_s = ((s * 100000.0).round() as i64).to_string();
+        attrs.push(("sx", scale_s.as_str()));
+        attrs.push(("sy", scale_s.as_str()));
+        attrs.push(("algn", "ctr"));
+    }
+    xml.start("a:outerShdw", &attrs);
     srgb(xml, &resolved.rgb, resolved.alpha);
     xml.end("a:outerShdw");
     xml.end("a:effectLst");

@@ -1402,7 +1402,11 @@ fn shadow_from(sp_pr: Option<&XmlEl>, slots: &SlotColors) -> Option<Shadow> {
         Some((px(ox), px(oy)))
     };
     let color = color_from_fill(shdw, slots)?;
-    Some(Shadow { blur, color, offset })
+    let scale = attr(shdw, "sx")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v / 100000.0)
+        .filter(|&v| (v - 1.0).abs() > 1e-6);
+    Some(Shadow { blur, color, offset, scale })
 }
 
 fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {

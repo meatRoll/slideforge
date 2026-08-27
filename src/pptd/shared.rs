@@ -179,6 +179,10 @@ pub struct Shadow {
     /// `[x, y]` offset; defaults to `[0, 0]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<(f64, f64)>,
+    /// Scale factor (1.0 = 100%); mirrors OOXML `outerShdw` `sx`/`sy`. When
+    /// > 1.0 the shadow peeks out beyond the shape edge (a centered halo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
 }
 
 /// One stop of a gradient, with `position` in `[0, 1]`.
