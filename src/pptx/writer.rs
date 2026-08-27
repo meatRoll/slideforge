@@ -541,7 +541,7 @@ fn slide_layout_xml() -> String {
 /// slide's or layout's own media for relationship ids.
 fn collect_media_from(background: Option<&crate::pptd::shared::Fill>, elements: &[Element]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut push = |src: &str, out: &mut Vec<String>| {
+    let push = |src: &str, out: &mut Vec<String>| {
         if !out.iter().any(|s| s == src) {
             out.push(src.to_string());
         }

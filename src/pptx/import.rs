@@ -682,7 +682,7 @@ fn build_layout(
     };
 
     let mut elements = Vec::new();
-    let mut protos: BTreeMap<PhKey, PlaceholderProto>;
+    let protos: BTreeMap<PhKey, PlaceholderProto>;
     {
         let mut lctx = PageCtx {
             page_no: 0,
