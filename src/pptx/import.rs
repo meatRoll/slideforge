@@ -31,7 +31,7 @@ use xmltree::Element as XmlEl;
 
 use crate::pptd::ast::{Page, Presentation};
 use crate::pptd::elements::{
-    Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Shape, Text,
+    Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Shape, ShapeDef, Text,
     TextAutofit, TextContent, TextDirection,
 };
 use crate::pptd::layout::{LayoutDef, PlaceholderDef};
@@ -39,7 +39,7 @@ use crate::pptd::shared::{
     Alignment, Border, Bounds, Color, Fill, FontFamily, GradientFill, GradientType,
     HorizontalAlign, ImageCrop, ImageFit, ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
-use crate::pptd::theme::Theme;
+use crate::pptd::theme::{TextStyleConfig, Theme};
 use crate::{Error, Result};
 
 /// EMU per design px; the exact inverse of [`super::render::emu`].
@@ -121,6 +121,10 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         .as_deref()
         .map(|master| master_defaults(&mut zip, master, &slots))
         .unwrap_or_default();
+    let master_styles = master_target
+        .as_deref()
+        .map(|master| master_text_styles(&mut zip, master, &slots, &fonts))
+        .unwrap_or_default();
     let master_bg = master_target
         .as_deref()
         .map(|master| read_master_bg(&mut zip, master, &slots))
@@ -189,10 +193,16 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
                 master_bg.clone(),
             ),
         };
+        let master_line_spacing = ldefaults.line_spacing;
+        let master_spc_bef = ldefaults.spc_bef;
         let mut ctx = PageCtx {
             page_no,
             slots: &slots,
             defaults: ldefaults,
+            master_line_spacing,
+            master_spc_bef,
+            para_line_spacing: None,
+            para_margin_top: None,
             layout_placeholders: lprotos,
             fonts: lfonts,
             used_ids: BTreeSet::new(),
@@ -245,7 +255,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         }
         Some(Theme {
             colors,
-            text_styles: std::collections::HashMap::new(),
+            text_styles: master_styles,
             table_styles: std::collections::HashMap::new(),
         })
     };
@@ -280,6 +290,20 @@ struct PageCtx<'a> {
     slots: &'a SlotColors,
     /// Master `otherStyle` default run properties for un-styled runs.
     defaults: MasterDefaults,
+    /// Inherited paragraph line spacing (fraction) for placeholder text:
+    /// `bodyStyle → lvl1pPr → lnSpc` from the master; the `titleStyle`
+    /// value lives in `defaults.title_line_spacing`.
+    master_line_spacing: Option<f64>,
+    /// Line spacing (fraction) the current shape's paragraphs inherit when
+    /// their own `<a:pPr>` carries no `<a:lnSpc>` — set per shape in
+    /// `import_shape` from the placeholder chain.
+    para_line_spacing: Option<f64>,
+    /// Space-before (points) the current shape's paragraphs inherit when
+    /// their own `<a:pPr>` carries no `<a:spcBef>` — set per shape in
+    /// `import_shape` alongside `para_line_spacing`.
+    para_margin_top: Option<f64>,
+    /// Master `bodyStyle` space-before (points) for placeholder text.
+    master_spc_bef: Option<f64>,
     /// Placeholders captured from the layout/master spTree (keyed by
     /// `(type, idx)`) so slide placeholders that omit `<a:xfrm>` inherit
     /// geometry + `lstStyle` defaults per the OOXML placeholder chain.
@@ -498,6 +522,24 @@ struct MasterDefaults {
     latin_typeface: Option<String>,
     bold: Option<bool>,
     italic: Option<bool>,
+    /// Inherited paragraph line spacing (fraction, `spcPct/100000`) from
+    /// the placeholder's `lstStyle → lvl1pPr → lnSpc` — the slide paragraph
+    /// inherits it when its own `<a:pPr>` carries no `<a:lnSpc>` (OOXML
+    /// inheritance chain). `master_defaults` fills it from the master's
+    /// `bodyStyle`; `placeholder_proto` may override it per placeholder
+    /// with the layout's `lstStyle` value.
+    line_spacing: Option<f64>,
+    /// Master `titleStyle → lvl1pPr → lnSpc` (fraction) for title
+    /// placeholders, which inherit the title style rather than the body
+    /// style.
+    title_line_spacing: Option<f64>,
+    /// Inherited paragraph space-before (points, `spcBef`) from the
+    /// placeholder chain — dropped when the slide paragraph omits
+    /// `<a:spcBef>` and the master/layout supplies one (e.g. the standard
+    /// body lvl1 `spcPts 1000`).
+    spc_bef: Option<f64>,
+    /// Master `titleStyle → lvl1pPr → spcBef` (points).
+    title_spc_bef: Option<f64>,
 }
 
 fn master_defaults(
@@ -518,7 +560,44 @@ fn master_defaults(
     let Some(rpr) = first(lvl1, "defRPr") else {
         return empty;
     };
-    def_rpr_defaults(rpr, slots)
+    // Capture the master's inherited paragraph line spacing for placeholder
+    // text: `bodyStyle` for body/subtitle-like placeholders and `titleStyle`
+    // for title placeholders. Slide paragraphs omit `<a:lnSpc>` whenever the
+    // master style is the intended value — dropping it here (as before this
+    // fix) makes the rebuilt deck fall back to the consumer's 100% default
+    // instead of the master's e.g. 90%.
+    let ln_spc = |style: &str| {
+        first_descendant(&master, style)
+            .and_then(|s| first(s, "lvl1pPr"))
+            .and_then(|p| first(p, "lnSpc"))
+            .and_then(|ls| first(ls, "spcPct"))
+            .and_then(|sp| attr(sp, "val"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v / 100000.0)
+    };
+    let mut d = def_rpr_defaults(rpr, slots);
+    d.line_spacing = ln_spc("bodyStyle");
+    d.title_line_spacing = ln_spc("titleStyle");
+    let body = first_descendant(&master, "bodyStyle");
+    let titles = first_descendant(&master, "titleStyle");
+    d.spc_bef = body.and_then(|s| first(s, "lvl1pPr")).and_then(|l| lvl1_spc_bef(l, d.sz));
+    d.title_spc_bef = titles.and_then(|s| first(s, "lvl1pPr")).and_then(|l| lvl1_spc_bef(l, d.sz));
+    d
+}
+
+/// Master `lvl1pPr spcBef` in points: `spcPts` directly; `spcPct` resolved
+/// against the style's default run size.
+fn lvl1_spc_bef(lvl1: &XmlEl, default_sz: Option<f64>) -> Option<f64> {
+    let bef = first(lvl1, "spcBef")?;
+    if let Some(pts) = first(bef, "spcPts").and_then(|s| attr(s, "val")) {
+        return pts.parse::<f64>().ok().map(|v| v / 100.0);
+    }
+    let pct = first(bef, "spcPct")
+        .and_then(|s| attr(s, "val"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    // 0% → no space; a real percentage scales the default run size.
+    Some(pct / 100000.0 * default_sz.unwrap_or(0.0))
 }
 
 /// `defRPr` → `MasterDefaults` (shared by the master `otherStyle` path and
@@ -533,7 +612,81 @@ fn def_rpr_defaults(rpr: &XmlEl, slots: &SlotColors) -> MasterDefaults {
             .map(str::to_string),
         bold: attr(rpr, "b").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
         italic: attr(rpr, "i").and_then(|s| s.parse::<u8>().ok()).map(|v| v != 0),
+        line_spacing: None,
+        title_line_spacing: None,
+        spc_bef: None,
+        title_spc_bef: None,
     }
+}
+
+/// Capture the master's `txStyles` (title/body/other) first-level defaults
+/// into PPTD `theme.textStyles` (`title`/`body`/`other` keys) so the
+/// rebuild can re-emit the master's `txStyles`. Placeholder shapes inherit
+/// these paragraph/run defaults per the OOXML chain, and the default run
+/// size + line spacing drive placeholder line metrics in every consumer.
+fn master_text_styles(
+    zip: &mut zip::ZipArchive<fs::File>,
+    master_part: &str,
+    slots: &SlotColors,
+    fonts: &ThemeFonts,
+) -> std::collections::HashMap<String, TextStyleConfig> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(master) = parse_part(zip, master_part) else {
+        return out;
+    };
+    let Some(tx_styles) = first(&master, "txStyles") else {
+        return out;
+    };
+    for (key, style_name) in [("title", "titleStyle"), ("body", "bodyStyle"), ("other", "otherStyle")] {
+        let Some(style) = first(tx_styles, style_name) else {
+            continue;
+        };
+        let Some(lvl1) = first(style, "lvl1pPr") else {
+            continue;
+        };
+        let rpr = first(lvl1, "defRPr");
+        let cfg = TextStyleConfig {
+            color: rpr.and_then(|r| color_from_fill(r, slots)),
+            font_size: rpr
+                .and_then(|r| attr(r, "sz"))
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|v| v / 100.0),
+            font_family: rpr
+                .and_then(|r| first(r, "latin"))
+                .and_then(|l| attr(l, "typeface"))
+                .filter(|s| !s.is_empty())
+                .and_then(|tf| resolve_typeface(tf, fonts))
+                .map(FontFamily::Single),
+            bold: rpr
+                .and_then(|r| attr(r, "b"))
+                .and_then(|s| s.parse::<u8>().ok())
+                .map(|v| v != 0),
+            italic: rpr
+                .and_then(|r| attr(r, "i"))
+                .and_then(|s| s.parse::<u8>().ok())
+                .map(|v| v != 0),
+            line_height: first(lvl1, "lnSpc")
+                .and_then(|ls| first(ls, "spcPct"))
+                .and_then(|sp| attr(sp, "val"))
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|v| v / 100000.0),
+            margin_top: lvl1_spc_bef(lvl1, rpr.and_then(|r| attr(r, "sz")).and_then(|s| s.parse::<f64>().ok()).map(|v| v / 100.0)),
+            background_color: None,
+            line_height_px: None,
+            letter_spacing: None,
+        };
+        let has_content = cfg.color.is_some()
+            || cfg.font_size.is_some()
+            || cfg.font_family.is_some()
+            || cfg.bold.is_some()
+            || cfg.italic.is_some()
+            || cfg.line_height.is_some()
+            || cfg.margin_top.is_some();
+        if has_content {
+            out.insert(key.to_string(), cfg);
+        }
+    }
+    out
 }
 
 /// Placeholder match key: OOXML `type` (absent → "body") plus optional `idx`.
@@ -548,6 +701,10 @@ struct PlaceholderProto {
     xfrm: Xform,
     /// Preset geometry name when the layout placeholder carries one.
     prst: Option<String>,
+    /// Vertical anchor from the layout placeholder's `bodyPr` (e.g. title
+    /// templates are `anchor="ctr"`), inherited by slide placeholders that
+    /// omit `<a:bodyPr>` on their own shape.
+    anchor: Option<VerticalAlign>,
     /// Run-style fallback from the placeholder's `lstStyle → lvl1pPr →
     /// defRPr` — for a title placeholder this is the only source of the
     /// 24pt bold blue face, since the master `otherStyle` is generic.
@@ -581,13 +738,37 @@ fn placeholder_proto(el: &XmlEl, slots: &SlotColors) -> Option<PlaceholderProto>
     let prst = first(sp_pr, "prstGeom")
         .and_then(|g| attr(g, "prst"))
         .map(str::to_string);
-    let defaults = first(el, "txBody")
+    let mut defaults = first(el, "txBody")
         .and_then(|tb| first(tb, "lstStyle"))
         .and_then(|lst| first(lst, "lvl1pPr"))
         .and_then(|lvl1| first(lvl1, "defRPr"))
         .map(|rpr| def_rpr_defaults(rpr, slots))
         .unwrap_or_default();
-    Some(PlaceholderProto { xfrm, prst, defaults })
+    // The layout placeholder's `lstStyle → lvl1pPr → lnSpc` is inherited by
+    // slide placeholders as the paragraph line spacing; when present it
+    // overrides the master `bodyStyle` value captured via `master_defaults`.
+    defaults.line_spacing = first(el, "txBody")
+        .and_then(|tb| first(tb, "lstStyle"))
+        .and_then(|lst| first(lst, "lvl1pPr"))
+        .and_then(|lvl1| first(lvl1, "lnSpc"))
+        .and_then(|ls| first(ls, "spcPct"))
+        .and_then(|sp| attr(sp, "val"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v / 100000.0);
+    defaults.spc_bef = first(el, "txBody")
+        .and_then(|tb| first(tb, "lstStyle"))
+        .and_then(|lst| first(lst, "lvl1pPr"))
+        .and_then(|lvl1| lvl1_spc_bef(lvl1, defaults.sz));
+    let anchor = first(el, "txBody")
+        .and_then(|tb| first(tb, "bodyPr"))
+        .and_then(|bp| attr(bp, "anchor"))
+        .map(|a| match a {
+            "t" => VerticalAlign::Top,
+            "ctr" => VerticalAlign::Middle,
+            "b" => VerticalAlign::Bottom,
+            _ => VerticalAlign::Top,
+        });
+    Some(PlaceholderProto { xfrm, prst, anchor, defaults })
 }
 
 /// Owned bundle of a layout's build artifacts, cached per distinct layout
@@ -703,6 +884,10 @@ fn build_layout(
             page_no: 0,
             slots,
             defaults: defaults.clone(),
+            master_line_spacing: defaults.line_spacing,
+            master_spc_bef: defaults.spc_bef,
+            para_line_spacing: None,
+            para_margin_top: None,
             layout_placeholders: BTreeMap::new(),
             fonts: fonts.clone(),
             used_ids: BTreeSet::new(),
@@ -1364,6 +1549,9 @@ fn map_sp(
     if let Some(proto) = &inherited_proto {
         inherited_defaults = Some(proto.defaults.clone());
     }
+    // Vertical anchor inherited from the layout placeholder template (used
+    // after `inherited_proto` is consumed by the geometry match below).
+    let proto_anchor = inherited_proto.as_ref().and_then(|p| p.anchor);
     let (x, inherited_prst) = match (xfrm_el, inherited_proto) {
         (Some(xel), _) => (Xform::parse(xel).apply(group), None),
         (None, Some(proto)) => {
@@ -1424,10 +1612,70 @@ fn map_sp(
             base = d.clone();
         }
         let (base, bullet) = lst_style_info(base, tx_body, ctx.slots);
+        // Inherited paragraph line spacing for placeholder text: the layout
+        // placeholder's `lstStyle lnSpc` wins; otherwise the master
+        // `bodyStyle` value (or `titleStyle` for title placeholders). Plain
+        // text boxes keep the consumer's default — they never inherited a
+        // paragraph style from the master chain.
+        let para_line_spacing = if ph.is_some() {
+            inherited_defaults
+                .as_ref()
+                .and_then(|d| d.line_spacing)
+                .or_else(|| {
+                    if ph
+                        .as_ref()
+                        .and_then(|p| attr(p, "type"))
+                        .is_some_and(|t| t == "title")
+                    {
+                        ctx.defaults
+                            .title_line_spacing
+                            .or(ctx.master_line_spacing)
+                    } else {
+                        ctx.master_line_spacing
+                    }
+                })
+        } else {
+            None
+        };
+        let para_margin_top = if ph.is_some() {
+            inherited_defaults
+                .as_ref()
+                .and_then(|d| d.spc_bef)
+                .or_else(|| {
+                    if ph
+                        .as_ref()
+                        .and_then(|p| attr(p, "type"))
+                        .is_some_and(|t| t == "title")
+                    {
+                        ctx.defaults.title_spc_bef.or(ctx.master_spc_bef)
+                    } else {
+                        ctx.master_spc_bef
+                    }
+                })
+        } else {
+            None
+        };
         let saved_defaults = ctx.defaults.clone();
         ctx.defaults = base;
+        let saved_para = ctx.para_line_spacing;
+        ctx.para_line_spacing = para_line_spacing;
+        let saved_mtop = ctx.para_margin_top;
+        ctx.para_margin_top = para_margin_top;
         let mut content = text_content(tx_body, ctx.slots, ctx, &name);
+        ctx.para_margin_top = saved_mtop;
+        ctx.para_line_spacing = saved_para;
         ctx.defaults = saved_defaults;
+        // Placeholders that omit their own `<a:bodyPr>` inherit the layout
+        // placeholder template's vertical anchor (title templates are
+        // `anchor="ctr"`); without it the box would sit top-aligned.
+        if let (Some(anchor), Some(c)) = (proto_anchor, content.as_mut()) {
+            if c.align.is_none() {
+                c.align = Some(Alignment {
+                    horizontal: HorizontalAlign::default(),
+                    vertical: anchor,
+                });
+            }
+        }
         if let Some(ref mut c) = content {
             c.bullet_char = bullet.char;
             c.bullet_font = bullet.font;
@@ -1646,27 +1894,38 @@ fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
                 _ => LineStyle::Solid,
             });
             // A gradient outline is captured verbatim; a solid colour
-            // directly. `<a:ln>` without any fill child draws no visible
-            // outline in Office (it inherits the shape's fill) — emit
-            // nothing rather than a 1pt black ring.
+            // directly. A `<a:ln>` with neither a solidFill nor a gradFill is
+            // still preserved as an empty line element (PowerPoint colourises
+            // it through `p:style > lnRef`, e.g. the 1pt frame on slide-2
+            // label cards) instead of being dropped.
             let gradient = first(ln, "gradFill")
                 .and_then(|g| gradient_from(g, slots))
                 .and_then(|f| match f {
-                    Fill::Gradient { gradient_type, stops, angle } => {
-                        Some(GradientFill { gradient_type, stops, angle })
+                    Fill::Gradient { gradient_type, stops, angle, scaled } => {
+                        Some(GradientFill { gradient_type, stops, angle, scaled })
                     }
                     _ => None,
                 });
             let color = first(ln, "solidFill").and_then(|s| color_from_fill(s, slots));
-            if gradient.is_none() && color.is_none() {
-                return None;
-            }
-            return Some(Border {
+            let mut border = Border {
                 style,
                 width,
                 color,
                 gradient,
-            });
+            };
+            // A line with neither a solidFill nor a gradFill is colourised
+            // by Office through `<p:style><a:lnRef …>` (slide-2 label cards
+            // use idx=3 → lt1, a white 1pt frame). Resolve that reference
+            // into an explicit colour so PowerPoint _and_ LibreOffice draw
+            // the same white frame instead of a renderer-default tint.
+            if border.color.is_none() && border.gradient.is_none() {
+                if let Some(ln_ref) = ln_ref_border(sp_el, slots) {
+                    border.color = ln_ref.color;
+                    border.width = border.width.or(ln_ref.width);
+                    border.style = border.style.or(ln_ref.style);
+                }
+            }
+            return Some(border);
         }
     }
     // No explicit spPr `<a:ln>` → fall back to `<p:style><a:lnRef>`.
@@ -2032,14 +2291,34 @@ fn map_pic(
     // srcRect → fit mode approximation (exact for full-bleed stretch).
     let (fit, crop) = src_rect_fit(blip_fill, ctx);
     let id = ctx.unique_id(&name, "image");
+    // Preserve the picture's clip geometry (`prstGeom prst="ellipse"` etc.
+    // — round avatar badges / logo tiles) plus its soft-edge effect, so the
+    // rebuild clips the picture the same way instead of a plain rectangle.
+    let crop_shape = sp_pr
+        .and_then(|p| first(p, "prstGeom"))
+        .and_then(|g| attr(g, "prst"))
+        .filter(|prst| *prst != "rect" && *prst != "custom")
+        .map(|prst| ShapeDef {
+            shape_name: prst.to_string(),
+            adjustments: None,
+            view_box: None,
+            path: None,
+        });
+    let soft_edge = sp_pr
+        .and_then(|p| first(p, "effectLst"))
+        .and_then(|e| first(e, "softEdge"))
+        .and_then(|s| attr(s, "rad"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|emu| emu / EMU_PER_PX);
     Some(Element::Image(Image {
         common: common(&x, id),
         src,
-        crop_shape: None,
+        crop_shape,
         fit,
         crop,
         border: None,
         shadow: None,
+        soft_edge,
     }))
 }
 
@@ -2309,16 +2588,19 @@ fn gradient_from(grad: &XmlEl, slots: &SlotColors) -> Option<Fill> {
     }
     if let Some(lin) = first(grad, "lin") {
         let angle = attr(lin, "ang").and_then(|s| s.parse::<f64>().ok()).map(|a| a / 60000.0);
+        let scaled = attr(lin, "scaled").map_or(false, |v| v == "1");
         Some(Fill::Gradient {
             gradient_type: GradientType::Linear,
             stops,
             angle,
+            scaled,
         })
     } else if first(grad, "path").is_some() {
         Some(Fill::Gradient {
             gradient_type: GradientType::Radial,
             stops,
             angle: None,
+            scaled: false,
         })
     } else {
         None
@@ -2359,20 +2641,42 @@ fn text_content(
     let wrap = body_pr
         .and_then(|b| attr(b, "wrap"))
         .map(|w| w != "none");
-    let text_direction = body_pr
-        .and_then(|b| attr(b, "vert"))
-        .map(|v| matches!(v, "eaVert" | "vert" | "vert270") as u8)
-        .map(|_| TextDirection::Vertical);
-    // Auto-fit: `spAutoFit` / `normAutofit` children of bodyPr.
+    let text_direction = body_pr.and_then(|b| attr(b, "vert")).and_then(|v| match v {
+        "eaVert" | "vert" | "vert270" => Some(TextDirection::Vertical),
+        // `horz` is the default (and previously a bug turned it into
+        // Vertical: `matches!() as u8` yielded 0 which the `.map(_ => ..)`
+        // then ignored) — keep the PPTD honest here.
+        _ => None,
+    });
+    // Auto-fit: `spAutoFit` / `normAutofit` / `noAutofit` children of bodyPr.
     let autofit = body_pr.and_then(|b| {
         if first(b, "spAutoFit").is_some() {
             Some(TextAutofit::FitShape)
         } else if first(b, "normAutofit").is_some() {
             Some(TextAutofit::FitText)
+        } else if first(b, "noAutofit").is_some() {
+            Some(TextAutofit::Fixed)
         } else {
             None
         }
     });
+    // Preserve unfamilar `a:bodyPr` attributes verbatim (`vertOverflow`,
+    // `horzOverflow`, `numCol`, `spcCol`, `fromWordArt`, `anchorCtr`,
+    // `forceAA`, `compatLnSpc`, …). These tweak PowerPoint/WPS text layout
+    // (most notably the vertical text position inside an anchored box), and
+    // dropping them made rebuilds align differently in those renderers.
+    let body_pr_extras = body_pr.map(|b| {
+        b.attributes
+            .iter()
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "lIns" | "tIns" | "rIns" | "bIns" | "wrap" | "rtlCol" | "anchor" | "vert"
+                )
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    }).filter(|m| !m.is_empty());
     // Text insets: OOXML defaults when the attribute is absent are
     // lIns/rIns = 91440 EMU (7.2px) and tIns/bIns = 45720 EMU (3.6px).
     // Using 7.2 for all pushed text ~3.6px too low on boxes with an
@@ -2468,13 +2772,19 @@ fn text_content(
             .and_then(|ls| first(ls, "spcPct"))
             .and_then(|sp| attr(sp, "val"))
             .and_then(|v| v.parse::<f64>().ok())
-            .map(|v| v / 100000.0);
+            .map(|v| v / 100000.0)
+            // Placeholder paragraphs inherit the master/layout `lnSpc`
+            // when their own `<a:pPr>` carries none (OOXML chain).
+            .or(ctx.para_line_spacing);
         let mt = p_pr
             .and_then(|pp| first(pp, "spcBef"))
             .and_then(|b| first(b, "spcPts"))
             .and_then(|s| attr(s, "val"))
             .and_then(|v| v.parse::<f64>().ok())
-            .map(|v| v / 100.0); // spcPts/100 → px
+            .map(|v| v / 100.0) // spcPts/100 → px
+            // Placeholder paragraphs inherit the master/layout `spcBef`
+            // when their own `<a:pPr>` carries none (OOXML chain).
+            .or(ctx.para_margin_top);
         let mut runs: Vec<(Option<RunStyle>, String)> = Vec::new();
         for child in p.children.iter().filter_map(|n| n.as_element()) {
             match child.name.as_str() {
@@ -2661,6 +2971,7 @@ fn text_content(
         autofit,
         text_direction,
         wrap,
+        body_pr_extras,
         align: match (align, anchor) {
             // A paragraph with no explicit `algn` still inherits the box's
             // vertical anchor; keep `align` set whenever the vertical
@@ -2813,6 +3124,10 @@ mod tests {
             latin_typeface: Some("+mn-lt".into()),
             bold: None,
             italic: None,
+            line_spacing: None,
+            title_line_spacing: None,
+            spc_bef: None,
+            title_spc_bef: None,
         }
     }
 
@@ -2858,5 +3173,72 @@ mod tests {
         let st = RunStyle::from_rpr(Some(&rpr), &slots, &MasterDefaults::default(), &fonts())
             .expect("rPr must yield a style");
         assert_eq!(st.color.as_ref().map(|c| c.0.as_str()), Some("#000000"));
+    }
+
+    #[test]
+    fn master_body_title_line_spacing_is_captured() {
+        // A WPS/Office master whose bodyStyle/titleStyle carry `lnSpc 90%`
+        // (spcPct 90000): the importer must carry the fraction so slides
+        // that omit `<a:lnSpc>` on placeholder paragraphs rebuild with the
+        // same 0.9 spacing instead of the consumer's 100% default.
+        let master_xml = r#"<?xml version="1.0"?><p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:txStyles>
+  <p:titleStyle>
+    <a:lvl1pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:defRPr sz="4400"/></a:lvl1pPr>
+  </p:titleStyle>
+  <p:bodyStyle>
+    <a:lvl1pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:defRPr sz="2800"/></a:lvl1pPr>
+    <a:lvl2pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:defRPr sz="2400"/></a:lvl2pPr>
+  </p:bodyStyle>
+  <p:otherStyle>
+    <a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr>
+  </p:otherStyle>
+</p:txStyles>
+</p:sldMaster>"#;
+        let path = std::env::temp_dir().join("slideforge-master-defaults-test.pptx");
+        use std::io::Write as _;
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        w.start_file("ppt/slideMasters/slideMaster1.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(master_xml.as_bytes()).unwrap();
+        w.finish().unwrap();
+        // p:sldMaster -> path ppt/slideMasters/slideMaster1.xml
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let d = master_defaults(&mut archive, "ppt/slideMasters/slideMaster1.xml", &SlotColors::new());
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(d.sz, Some(18.0), "otherStyle defRPr sz=1800 → 18pt");
+        assert_eq!(
+            d.line_spacing,
+            Some(0.9),
+            "bodyStyle lvl1pPr lnSpc 90000 → 0.9"
+        );
+        assert_eq!(
+            d.title_line_spacing,
+            Some(0.9),
+            "titleStyle lvl1pPr lnSpc 90000 → 0.9"
+        );
+    }
+
+    #[test]
+    fn placeholder_proto_captures_body_pr_anchor() {
+        // Title placeholder templates carry `anchor="ctr"`; slide title
+        // placeholders with an empty `<a:bodyPr/>` must inherit that vertical
+        // anchor instead of defaulting to top.
+        let el = parse(
+            r#"<?xml version="1.0"?><p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvSpPr><p:cNvPr name="Title Placeholder"/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="1000" y="1000"/><a:ext cx="5000" cy="2000"/></a:xfrm><a:prstGeom prst="rect"/></p:spPr>
+<p:txBody><a:bodyPr anchor="ctr" lIns="91440" tIns="45720" rIns="91440" bIns="45720"/><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>"#,
+        );
+        let proto = placeholder_proto(&el, &SlotColors::new()).expect("constant placeholder proto");
+        assert_eq!(proto.anchor, Some(VerticalAlign::Middle));
+        // And a template without an anchor stays top (default).
+        let el2 = parse(
+            r#"<?xml version="1.0"?><p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvSpPr><p:cNvPr name="Body Placeholder"/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr>
+<p:txBody><a:bodyPr/></p:txBody></p:sp>"#,
+        );
+        let proto2 = placeholder_proto(&el2, &SlotColors::new()).expect("constant placeholder proto");
+        assert_eq!(proto2.anchor, None);
     }
 }

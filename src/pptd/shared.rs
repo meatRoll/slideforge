@@ -205,6 +205,11 @@ pub enum GradientType {
     Radial,
 }
 
+/// Compact helpers: serde guards used across PPTD types.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// A linear or radial gradient used as a fill or text decoration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,6 +221,9 @@ pub struct GradientFill {
     /// Only effective for linear gradients; `0` = left to right, clockwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
+    /// `a:lin scaled` — gradient is scaled to the shape's bounding box.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scaled: bool,
 }
 
 /// How a [`Fill::Image`] adapts to its container.
@@ -266,6 +274,9 @@ pub enum Fill {
         stops: Vec<ColorStop>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         angle: Option<f64>,
+        /// `a:lin scaled` — gradient is scaled to the shape's bounding box.
+        #[serde(default, skip_serializing_if = "is_false")]
+        scaled: bool,
     },
     /// `type: image`; `src` may be a relative path or `https://` URL.
     Image {

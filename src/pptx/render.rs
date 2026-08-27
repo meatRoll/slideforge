@@ -296,13 +296,26 @@ fn emit_fill_color(xml: &mut Xml, color: &ResolvedColor) {
 /// `a:ln` from a border spec. Schema order inside `a:ln`: fill, then
 /// `a:prstDash`, then the join. `prstDash` must never be an attribute.
 fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<()> {
-    let width = emu(border.width.unwrap_or(1.0)).to_string();
+    // Emit `w` whenever the border carries a fill, so a solid/gradient
+    // outline keeps its source thickness (OOXML defaults `<a:ln w>` to
+    // 0.75pt when the attribute is missing; PowerPoint/Impress respect
+    // it). Only an empty `<a:ln>` (no fill child at all) may drop `w`,
+    // matching the P2 gradient-frame case where the default value flipped
+    // the segment gradient bounding box.
+    let width_attr: Option<String> = border
+        .width
+        .filter(|w| border.color.is_some() || border.gradient.is_some())
+        .map(|w| emu(w).to_string());
     let dash: Option<&str> = border.style.map(|style| match style {
         LineStyle::Solid => "solid",
         LineStyle::Dash => "dash",
         LineStyle::Dot => "dot",
     });
-    xml.start("a:ln", &[("w", &width)]);
+    if let Some(width) = &width_attr {
+        xml.start("a:ln", &[("w", width)]);
+    } else {
+        xml.start("a:ln", &[]);
+    }
     if let Some(grad) = &border.gradient {
         fill_xml(
             xml,
@@ -311,21 +324,17 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
                 gradient_type: grad.gradient_type,
                 stops: grad.stops.clone(),
                 angle: grad.angle,
+                scaled: grad.scaled,
             },
             None,
         )?;
     } else if let Some(color) = &border.color {
         let resolved = resolve_color(theme, color)?;
         emit_fill_color(xml, &resolved);
-    } else {
-        emit_fill_color(
-            xml,
-            &ResolvedColor {
-                rgb: "000000".to_owned(),
-                alpha: None,
-            },
-        );
     }
+    // `color` + `gradient` both None → empty `<a:ln>` with no fill child,
+    // matching a source line that colourised via `p:style lnRef` (and
+    // invisible in LibreOffice). Never default to a black ring here.
     if let Some(dash) = dash {
         xml.leaf("a:prstDash", &[("val", dash)]);
     }
@@ -393,6 +402,7 @@ pub fn fill_xml(
             gradient_type,
             stops,
             angle,
+            scaled,
         } => {
             xml.start("a:gradFill", &[("rotWithShape", "1")]);
             xml.start("a:gsLst", &[]);
@@ -411,7 +421,7 @@ pub fn fill_xml(
             match gradient_type {
                 GradientType::Linear => {
                     let angle = (angle.unwrap_or(0.0) * 60000.0).round().to_string();
-                    xml.start("a:lin", &[("ang", &angle), ("scaled", "0")]);
+                    xml.start("a:lin", &[("ang", &angle), ("scaled", if *scaled { "1" } else { "0" })]);
                     xml.end("a:lin");
                 }
                 GradientType::Radial => {
@@ -488,6 +498,8 @@ pub struct EffTextStyle {
     pub margin_right: Option<f64>,
     pub margin_bottom: Option<f64>,
     pub autofit: Option<TextAutofit>,
+    /// Raw `a:bodyPr` attributes preserved verbatim from the source.
+    pub body_pr_extras: Option<std::collections::BTreeMap<String, String>>,
     /// List bullet glyph (e.g. `•`); `None` → no bullet.
     pub bullet_char: Option<String>,
     /// Bullet typeface (e.g. `Arial`).
@@ -529,6 +541,7 @@ pub fn effective_text_style(theme: Option<&Theme>, content: &TextContent) -> Eff
         margin_right: content.margin_right,
         margin_bottom: content.margin_bottom,
         autofit: content.autofit,
+        body_pr_extras: content.body_pr_extras.clone(),
         bullet_char: content.bullet_char.clone(),
         bullet_font: content.bullet_font.clone(),
         list_margin: content.list_margin,
@@ -582,10 +595,13 @@ fn render_text(
     xml.start("p:nvSpPr", &[]);
     xml.start("p:cNvPr", &[("id", &id), ("name", &name)]);
     xml.end("p:cNvPr");
-    if is_empty_placeholder {
-        // Typed placeholder (empty) — WPS renders the prompt
-        // ("Click to edit title") for `<p:ph type>` + empty txBody.
-        let ph_type = text.placeholder.as_deref().unwrap_or("body");
+    if let Some(ph_type) = text.placeholder.as_deref() {
+        // Re-emit the `<p:ph type>` so the rebuilt shape keeps inheriting
+        // the master/layout placeholder styles (default fonts, line
+        // spacing, colour) instead of becoming a plain `txBox` text box.
+        // Non-empty placeholders must stay placeholders — writing them as
+        // plain shapes drops the OOXML inheritance chain, which changes
+        // paragraph metrics (e.g. subtitle line pitch) in every consumer.
         xml.leaf("p:cNvSpPr", &[]);
         xml.start("p:nvPr", &[]);
         xml.leaf("p:ph", &[("type", ph_type)]);
@@ -656,21 +672,28 @@ fn render_text(
         "square"
     };
     let ins = |v: Option<f64>| -> String { emu(v.unwrap_or(0.0)).to_string() };
-    xml.start(
-        "a:bodyPr",
-        &[
-            ("lIns", &ins(style.margin_left)),
-            ("rIns", &ins(style.margin_right)),
-            ("tIns", &ins(style.margin_top)),
-            ("bIns", &ins(style.margin_bottom)),
-            ("wrap", wrap),
-            ("rtlCol", "0"),
-            ("anchor", anchor),
-        ],
-    );
+    let mut bpr_v: Vec<String> = vec![
+        ins(style.margin_left),
+        ins(style.margin_right),
+        ins(style.margin_top),
+        ins(style.margin_bottom),
+        wrap.to_string(),
+        "0".to_string(),
+        anchor.to_string(),
+    ];
+    let mut bpr_k: Vec<&str> = vec!["lIns", "rIns", "tIns", "bIns", "wrap", "rtlCol", "anchor"];
+    if let Some(extras) = &style.body_pr_extras {
+        for (k, v) in extras {
+            bpr_k.push(k.as_str());
+            bpr_v.push(v.clone());
+        }
+    }
+    let bpr_attrs: Vec<(&str, &str)> = bpr_k.into_iter().zip(bpr_v.iter().map(String::as_str)).collect();
+    xml.start("a:bodyPr", &bpr_attrs);
     match style.autofit {
         Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
         Some(TextAutofit::FitText) => xml.leaf("a:normAutofit", &[]),
+        Some(TextAutofit::Fixed) => xml.leaf("a:noAutofit", &[]),
         None => {}
     }
     xml.end("a:bodyPr");
@@ -997,21 +1020,28 @@ fn render_rich_body(
         "square"
     };
     let ins = |v: Option<f64>| -> String { emu(v.unwrap_or(0.0)).to_string() };
-    xml.start(
-        "a:bodyPr",
-        &[
-            ("lIns", &ins(style.margin_left)),
-            ("rIns", &ins(style.margin_right)),
-            ("tIns", &ins(style.margin_top)),
-            ("bIns", &ins(style.margin_bottom)),
-            ("wrap", wrap),
-            ("rtlCol", "0"),
-            ("anchor", anchor),
-        ],
-    );
+    let mut bpr_v: Vec<String> = vec![
+        ins(style.margin_left),
+        ins(style.margin_right),
+        ins(style.margin_top),
+        ins(style.margin_bottom),
+        wrap.to_string(),
+        "0".to_string(),
+        anchor.to_string(),
+    ];
+    let mut bpr_k: Vec<&str> = vec!["lIns", "rIns", "tIns", "bIns", "wrap", "rtlCol", "anchor"];
+    if let Some(extras) = &style.body_pr_extras {
+        for (k, v) in extras {
+            bpr_k.push(k.as_str());
+            bpr_v.push(v.clone());
+        }
+    }
+    let bpr_attrs: Vec<(&str, &str)> = bpr_k.into_iter().zip(bpr_v.iter().map(String::as_str)).collect();
+    xml.start("a:bodyPr", &bpr_attrs);
     match style.autofit {
         Some(TextAutofit::FitShape) => xml.leaf("a:spAutoFit", &[]),
         Some(TextAutofit::FitText) => xml.leaf("a:normAutofit", &[]),
+        Some(TextAutofit::Fixed) => xml.leaf("a:noAutofit", &[]),
         None => {}
     }
     xml.end("a:bodyPr");
@@ -1632,7 +1662,80 @@ fn render_image(xml: &mut Xml, ctx: &mut RenderCtx<'_>, image: &Image) -> Result
         xml.leaf("a:noFill", &[]);
         xml.end("a:ln");
     }
+    if let Some(radius_px) = image.soft_edge.filter(|r| *r > 0.0) {
+        let rad = emu(radius_px) as u64;
+        xml.start("a:effectLst", &[]);
+        xml.leaf("a:softEdge", &[("rad", &rad.to_string())]);
+        xml.end("a:effectLst");
+    }
     xml.end("p:spPr");
     xml.end("p:pic");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pptd::shared::ColorStop;
+
+    fn border(width: Option<f64>) -> Border {
+        Border {
+            style: Some(LineStyle::Solid),
+            width,
+            color: Some(Color("000000".into())),
+            gradient: None,
+        }
+    }
+
+    #[test]
+    fn border_width_policy_distinguishes_empty_and_filled() {
+        // An empty `<a:ln>` (no solid/gradient fill) may drop `w`: the
+        // P2 gradient-frame test confirmed that an explicit default
+        // attribute flipped the line gradient bounding box in Impress.
+        // A line with a fill, however, must keep `w`; OOXML otherwise
+        // defaults the attribute to 0.75pt and a 1pt source frame ends
+        // up visibly thinner in the rebuild.
+        let mut xml = Xml::new();
+        border_xml(&mut xml, None, &border(None)).unwrap();
+        let empty = xml.into_string();
+        assert!(empty.contains("<a:ln>"), "{empty}");
+        assert!(!empty.contains(" w="), "{empty}");
+
+        let mut xml = Xml::new();
+        border_xml(&mut xml, None, &border(Some(1.0))).unwrap();
+        let filled = xml.into_string();
+        assert!(filled.contains("<a:ln w=\"12700\">"), "{filled}");
+
+        let mut xml = Xml::new();
+        border_xml(&mut xml, None, &border(Some(2.0))).unwrap();
+        assert!(xml.into_string().contains("<a:ln w=\"25400\">"));
+    }
+
+    #[test]
+    fn gradient_border_keeps_lin_scaled() {
+        let b = Border {
+            style: Some(LineStyle::Solid),
+            width: None,
+            color: None,
+            gradient: Some(crate::pptd::shared::GradientFill {
+                gradient_type: GradientType::Linear,
+                stops: vec![
+                    ColorStop {
+                        position: 0.0,
+                        color: Color("FFFFFF".into()),
+                    },
+                    ColorStop {
+                        position: 1.0,
+                        color: Color("2C94FB".into()),
+                    },
+                ],
+                angle: Some(45.0),
+                scaled: true,
+            }),
+        };
+        let mut xml = Xml::new();
+        border_xml(&mut xml, None, &b).unwrap();
+        let out = xml.into_string();
+        assert!(out.contains("scaled=\"1\""), "{out}");
+    }
 }

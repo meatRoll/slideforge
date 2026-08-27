@@ -154,6 +154,8 @@ pub enum TextAutofit {
     FitShape,
     /// `normAutofit`: shrink the font to fit the fixed shape.
     FitText,
+    /// `noAutofit`: never auto-fit; keep the fixed box.
+    Fixed,
 }
 
 /// Rich text content of a [`Text`] element.
@@ -198,6 +200,13 @@ pub struct TextContent {
     /// Whether the text wraps; defaults to `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap: Option<bool>,
+    /// Raw `a:bodyPr` attributes not covered by the fields above (e.g.
+    /// `vertOverflow`, `horzOverflow`, `numCol`, `compatLnSpc`, `anchorCtr`,
+    /// `forceAA`). Preserved verbatim so PowerPoint/WPS layout quirks — most
+    /// importantly the vertical text position inside an anchored box — are
+    /// round-tripped instead of falling back to engine defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_pr_extras: Option<std::collections::BTreeMap<String, String>>,
     /// `[horizontal, vertical]` alignment; defaults to `["left", "top"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Alignment>,
@@ -343,6 +352,10 @@ pub struct Image {
     pub border: Option<Border>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+    /// Soft-edge radius (px) written as `a:softEdge rad` in the picture's
+    /// effect list (e.g. circular avatar badges with a feathered edge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_edge: Option<f64>,
 }
 
 /// `elementType: icon` — a Font Awesome 7.x icon, `iconName` is `style:name`.
