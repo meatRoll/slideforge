@@ -205,6 +205,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         custom_fonts: Vec::new(),
         size,
         theme,
+        layouts: None,
         pages,
     };
     let deck_yaml = serde_yaml::to_string(&presentation).map_err(|e| Error::Invalid(format!("serialize deck: {e}")))?;
@@ -753,6 +754,7 @@ fn extract_page(
 
     Ok(Page {
         page_type: None,
+        layout: None,
         background,
         notes: None,
         elements,
@@ -1081,6 +1083,7 @@ fn map_sp(
                 content,
                 fill,
                 border,
+                placeholder: None,
             })));
         }
         // Empty text bodies: invisible padding boxes — only keep them when

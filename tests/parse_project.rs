@@ -121,3 +121,107 @@ fn parses_border_spec_shapes() {
         assert_eq!(&parsed, expected, "BorderSpec parse of `{yaml}`");
     }
 }
+
+// --- SlideForge layout extension (P1: data model) ---------------------------
+
+#[test]
+fn parses_layout_extension_fields() {
+    use slideforge::pptd::{Fill, Presentation};
+    let deck_yaml = "\
+version: v2
+size: [960, 540]
+pages: []
+layouts:
+  cover:
+    background: {type: solid, color: \"#0070C0\"}
+    elements:
+      - {elementId: bar, elementType: shape, bounds: [0, 520, 960, 20],
+         shapeName: rect, fill: {type: solid, color: \"#0070C0\"}}
+    placeholders:
+      title:
+        bounds: [60, 40, 600, 60]
+        style: \"$title\"
+        fontSize: 40
+        bold: true
+";
+    let pres: Presentation = serde_yaml::from_str(deck_yaml).expect("deck must parse");
+    let layouts = pres.layouts.expect("layouts present");
+    let cover = layouts.get("cover").expect("cover layout");
+    match cover.background.as_ref().unwrap() {
+        Fill::Solid { color } => assert_eq!(color.0, "#0070C0"),
+        other => panic!("expected solid bg, got {other:?}"),
+    }
+    assert_eq!(cover.elements.len(), 1, "deco element");
+    let title_ph = cover.placeholders.get("title").expect("title placeholder");
+    assert_eq!(title_ph.bounds.x, 60.0);
+    assert_eq!(title_ph.bounds.width, 600.0);
+    assert_eq!(title_ph.style.as_deref(), Some("$title"));
+    assert_eq!(title_ph.font_size, Some(40.0));
+    assert_eq!(title_ph.bold, Some(true));
+    assert!(title_ph.italic.is_none(), "italic unset");
+}
+
+#[test]
+fn page_layout_and_text_placeholder_parse() {
+    use slideforge::pptd::{Element, Page};
+    let page_yaml = "\
+layout: cover
+background: {type: solid, color: \"#FFFFFF\"}
+elements:
+  - elementId: t1
+    elementType: text
+    bounds: [60, 40, 600, 60]
+    placeholder: title
+    content: {text: Hello}
+";
+    let page: Page = serde_yaml::from_str(page_yaml).expect("page must parse");
+    assert_eq!(page.layout.as_deref(), Some("cover"));
+    match &page.elements[0] {
+        Element::Text(t) => assert_eq!(t.placeholder.as_deref(), Some("title")),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[test]
+fn flags_dangling_layout_reference() {
+    use slideforge::pptd::{Page, Presentation, Project, validate_project};
+    use std::path::PathBuf;
+    let presentation: Presentation = serde_yaml::from_str(
+        "version: v2\nsize: [960, 540]\npages: [pages/1.page]\nlayouts:\n  cover: {}\n",
+    )
+    .unwrap();
+    let page: Page = serde_yaml::from_str("layout: nope\nelements: []\n").unwrap();
+    let project = Project {
+        root_dir: PathBuf::from("."),
+        presentation,
+        page_paths: vec![PathBuf::from("pages/1.page")],
+        pages: vec![page],
+    };
+    let diags = validate_project(&project);
+    assert!(
+        diags.iter().any(|d| d.message.contains("not defined in presentation.layouts")),
+        "expected dangling-layout diagnostic, got {diags:?}"
+    );
+}
+
+#[test]
+fn accepts_valid_layout_reference() {
+    use slideforge::pptd::{Page, Presentation, Project, validate_project};
+    use std::path::PathBuf;
+    let presentation: Presentation = serde_yaml::from_str(
+        "version: v2\nsize: [960, 540]\npages: [pages/1.page]\nlayouts:\n  cover: {}\n",
+    )
+    .unwrap();
+    let page: Page = serde_yaml::from_str("layout: cover\nelements: []\n").unwrap();
+    let project = Project {
+        root_dir: PathBuf::from("."),
+        presentation,
+        page_paths: vec![PathBuf::from("pages/1.page")],
+        pages: vec![page],
+    };
+    let diags = validate_project(&project);
+    assert!(
+        diags.is_empty(),
+        "valid layout ref must not warn, got {diags:?}"
+    );
+}

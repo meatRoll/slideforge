@@ -197,6 +197,12 @@ pub struct Text {
     /// Box outline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<Border>,
+    /// SlideForge extension: the layout placeholder type this text box
+    /// inherits geometry/run-style defaults from (e.g. `"title"`). Resolved
+    /// against [`crate::pptd::layout::LayoutDef::placeholders`] on the page's
+    /// referenced layout. See `docs/pptd-layout-extension.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
 }
 
 /// `elementType: shape` — a built-in or custom geometry.

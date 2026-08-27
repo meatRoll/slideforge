@@ -1,9 +1,12 @@
 //! The root AST node of a PPTD project: [`Presentation`] and [`Page`].
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::animation::Animation;
 use super::elements::Element;
+use super::layout::LayoutDef;
 use super::shared::{Fill, Size};
 use super::theme::{CustomFont, Theme};
 
@@ -24,6 +27,10 @@ pub struct Presentation {
     /// Shared theme: colors, text styles and table styles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<Theme>,
+    /// SlideForge extension: named layouts a page may reference via
+    /// [`Page::layout`]. See `docs/pptd-layout-extension.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layouts: Option<HashMap<String, LayoutDef>>,
     /// Relative paths to the page files, e.g. `pages/1_cover.page`.
     pub pages: Vec<String>,
 }
@@ -35,6 +42,14 @@ pub struct Page {
     /// Category label; does not affect rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_type: Option<String>,
+    /// SlideForge extension: references a key in
+    /// [`Presentation::layouts`]. When set, the page inherits the layout's
+    /// background (unless overridden), decorative `elements` (painted under
+    /// the page's own) and `placeholders`. See
+    /// `docs/pptd-layout-extension.md`. Unset → fully self-contained
+    /// (canonical PPTD v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
     /// Page background; defaults to a white solid fill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Fill>,

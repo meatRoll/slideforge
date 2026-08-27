@@ -57,6 +57,25 @@ pub fn validate_project(project: &Project) -> Vec<Diagnostic> {
 fn validate_page(project: &Project, page_idx: usize, page: &Page, out: &mut Vec<Diagnostic>) {
     let theme = project.presentation.theme.as_ref();
 
+    // SlideForge extension: `Page.layout` must reference a key declared in
+    // `Presentation.layouts`. Unset pages are canonical (flat) and skipped.
+    if let Some(layout_key) = &page.layout {
+        let resolved = project
+            .presentation
+            .layouts
+            .as_ref()
+            .is_some_and(|m| m.contains_key(layout_key));
+        if !resolved {
+            diag(
+                out,
+                page_idx,
+                format!("layout `{layout_key}` is not defined in presentation.layouts"),
+            );
+        }
+    }
+    // TODO(P2): once convert sets `Text.placeholder`, check it resolves against
+    // the page's layout placeholders (needs the layout context plumbed in).
+
     let mut ids: HashSet<&str> = HashSet::new();
     for element in &page.elements {
         let element_id = element.element_id();
