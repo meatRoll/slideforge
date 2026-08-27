@@ -1,0 +1,19 @@
+version: v2
+title: SlideForge 最小样例
+size: [960, 540]
+theme:
+  colors:
+    primary: "#2563EB"
+    accent: "#F59E0B"
+    text: "#1F2937"
+  textStyles:
+    title:
+      fontSize: 40
+      color: "$primary"
+    body:
+      fontSize: 18
+      color: "$text"
+      lineHeight: 1.6
+pages:
+  - pages/1_cover.page
+  - pages/2_content.page

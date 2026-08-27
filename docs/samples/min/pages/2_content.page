@@ -1,0 +1,17 @@
+pageType: content
+elements:
+  - elementId: heading
+    elementType: text
+    bounds: [60, 40, 840, 50]
+    content:
+      style: "$title"
+      text: 关键指标
+  - elementId: body
+    elementType: text
+    bounds: [60, 120, 840, 360]
+    content:
+      style: "$body"
+      text: |
+        <p><strong>说明</strong>：本页只用了 <span style="color:$primary;">text</span> 与
+        <span style="color:$accent;">shape</span> 元素，可以安全 <em>build</em> 成 PPTX。</p>
+        <p style="text-align:right"><span style="font-size:14px; color:#6b7280;">—— 示例页</span></p>
