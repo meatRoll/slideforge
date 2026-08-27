@@ -151,6 +151,9 @@ fn render_group(
     xml.end("p:nvGrpSpPr");
     xml.start("p:grpSpPr", &[]);
     group_xfrm(xml, &def.xfrm);
+    if let Some(fill) = &def.fill {
+        fill_xml(xml, None, fill, None)?;
+    }
     xml.end("p:grpSpPr");
     let mut i = start;
     while i < end {

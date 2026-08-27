@@ -443,6 +443,11 @@ pub struct GroupDef {
     /// name at write time when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The group's own fill (`<p:grpSpPr>` solidFill/gradFill). Emitted in
+    /// the rebuilt `<p:grpSpPr>` so `<a:grpFill>` children inherit it and
+    /// renderers that paint the group's fill (QuickLook) show the banner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
     /// Parent group id for nested groups; `None` for a top-level group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,

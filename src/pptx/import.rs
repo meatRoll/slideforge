@@ -982,7 +982,7 @@ fn walk_sp_tree_child(
         "pic" => out.push(map_pic(el, rels, ctx, group)),
         "cxnSp" => out.push(map_line(el, ctx, group)),
         "grpSp" => {
-            flatten_group(el, rels, ctx, group, group_id, in_layout, out)?;
+            flatten_group(el, rels, ctx, group, group_id, None, in_layout, out)?;
         }
         "graphicFrame" => {
             let name = cnv_name(el).unwrap_or_else(|| "graphicFrame".into());
@@ -1016,6 +1016,7 @@ fn flatten_group(
     ctx: &mut PageCtx<'_>,
     outer: Option<&Xform>,
     parent_id: Option<&str>,
+    outer_fill: Option<&Fill>,
     in_layout: bool,
     out: &mut Vec<Option<Element>>,
 ) -> Result<()> {
@@ -1023,64 +1024,118 @@ fn flatten_group(
         return Ok(());
     };
     let raw = Xform::parse(grel);
-    // Degenerate group guard. WPS emits artifact groups whose own `ext` is
-    // ~0 (or whose `ext`/`chExt` ratio collapses children to ~0) while a
-    // *parent* group enlarges them back up. Composing those scales per the
-    // OOXML spec fabricates full-size children (e.g. a phantom header banner
-    // covering the card); renderers (WPS/QuickLook) instead draw nothing for
-    // such shrinking/zero-size groups, so skip them. Enlarging groups
-    // (`ext` >> `chExt`, e.g. a 635× scale that grows a stub child to full
-    // size) are NOT skipped — their children render, matching the source.
-    let degenerate = (raw.ext.0.abs() < 12700.0 && raw.ext.1.abs() < 12700.0)
+    let g = raw.apply(outer);
+    // The group's own fill (from `<p:grpSpPr>`). A child using `<a:grpFill>`
+    // inherits this — resolve it onto the member so the PPTD (flat model,
+    // no group-fill concept) carries a concrete fill.
+    let group_fill: Option<Fill> = first(el, "grpSpPr").and_then(|gpr| {
+        if first(gpr, "noFill").is_some() {
+            return None;
+        }
+        if first(gpr, "grpFill").is_some() {
+            return outer_fill.cloned();
+        }
+        if let Some(solid) = first(gpr, "solidFill") {
+            return color_from_fill(solid, ctx.slots).map(|color| Fill::Solid { color });
+        }
+        if let Some(grad) = first(gpr, "gradFill") {
+            return gradient_from(grad, ctx.slots);
+        }
+        None
+    });
+    // Classify the group. WPS emits three flavours:
+    //  - shrinking/zero-size (own `ext` ~0 or `ext`/`chExt` ~0): renders
+    //    nothing → skip (composing would fabricate phantom children).
+    //  - enlarging stub (`chExt` sub-pixel, `ext` normal): an artifact whose
+    //    children are tiny stubs scaled up to full size. PRESERVE as a real
+    //    `<p:grpSp>` so WPS's group selection box matches the source.
+    //  - normal (`chExt` ~ `ext`): FLATTEN — children render fine on their
+    //    own; keeping them grouped breaks grouped-custGeom rendering in
+    //    QuickLook/WPS (e.g. card header banners vanish).
+    let ext_sub = raw.ext.0.abs() < 12700.0 && raw.ext.1.abs() < 12700.0;
+    let ch_sub = raw.ch_ext.0.abs() < 12700.0 && raw.ch_ext.1.abs() < 12700.0;
+    let shrinking = ext_sub
         || (raw.ch_ext.0.abs() > 1e-3
             && raw.ch_ext.1.abs() > 1e-3
             && raw.ext.0 / raw.ch_ext.0 < 0.01
             && raw.ext.1 / raw.ch_ext.1 < 0.01);
-    if degenerate {
+    if shrinking {
         return Ok(());
     }
-    let g = raw.apply(outer);
-    // SlideForge group extension: register the group (RAW xfrm, verbatim) so
-    // the writer can rebuild the `<p:grpSp>` — preserving WPS's group
-    // selection box. `bounds` on member elements stays slide-space; the
-    // writer swaps in `groupBounds` (child-space) inside the group.
-    let group_id = ctx.next_group_id();
-    ctx.groups.insert(
-        group_id.clone(),
-        GroupDef {
-            xfrm: GroupXfrm {
-                off: (px(raw.off.0), px(raw.off.1)),
-                ext: (px(raw.ext.0), px(raw.ext.1)),
-                ch_off: (px(raw.ch_off.0), px(raw.ch_off.1)),
-                ch_ext: (px(raw.ch_ext.0), px(raw.ch_ext.1)),
-                rot: raw.rot,
-                flip: raw.flip.filter(|(h, v)| *h || *v),
+    let enlarging_stub = ch_sub && !ext_sub;
+    if enlarging_stub {
+        // PRESERVE: register the group + tag members (verbatim child-space
+        // xfrm) so the writer rebuilds the `<p:grpSp>`.
+        let group_id = ctx.next_group_id();
+        ctx.groups.insert(
+            group_id.clone(),
+            GroupDef {
+                xfrm: GroupXfrm {
+                    off: (px(raw.off.0), px(raw.off.1)),
+                    ext: (px(raw.ext.0), px(raw.ext.1)),
+                    ch_off: (px(raw.ch_off.0), px(raw.ch_off.1)),
+                    ch_ext: (px(raw.ch_ext.0), px(raw.ch_ext.1)),
+                    rot: raw.rot,
+                    flip: raw.flip.filter(|(h, v)| *h || *v),
+                },
+                name: cnv_name(el),
+                fill: group_fill.clone(),
+                parent: parent_id.map(str::to_owned),
             },
-            name: cnv_name(el),
-            parent: parent_id.map(str::to_owned),
-        },
-    );
+        );
+        for child in el.children.iter().filter_map(|n| n.as_element()) {
+            match child.name.as_str() {
+                "nvGrpSpPr" | "grpSpPr" => continue,
+                "grpSp" => {
+                    flatten_group(child, rels, ctx, Some(&g), Some(&group_id), group_fill.as_ref(), in_layout, out)?;
+                }
+                _ => {
+                    let before = out.len();
+                    walk_sp_tree_child(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+                    for slot in &mut out[before..] {
+                        if let Some(elem) = slot {
+                            elem.common_mut().group_id = Some(group_id.clone());
+                            if let Some(sp_pr) = first(child, "spPr") {
+                                if let Some(xel) = first(sp_pr, "xfrm") {
+                                    elem.common_mut().group_bounds =
+                                        Some(to_bounds(&Xform::parse(xel)));
+                                }
+                                if first(sp_pr, "grpFill").is_some() {
+                                    if let Element::Shape(shape) = elem {
+                                        if shape.fill.is_none() {
+                                            shape.fill = group_fill.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+    // FLATTEN (normal group): emit children as top-level slide-space shapes
+    // (composed xfrm applied), resolving `<a:grpFill>` against this group's
+    // fill. No group is registered.
     for child in el.children.iter().filter_map(|n| n.as_element()) {
         match child.name.as_str() {
             "nvGrpSpPr" | "grpSpPr" => continue,
             "grpSp" => {
-                // Nested group: recurse; it registers itself and tags its
-                // own children. Its `parent` is this group's id.
-                flatten_group(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+                flatten_group(child, rels, ctx, Some(&g), parent_id, group_fill.as_ref(), in_layout, out)?;
             }
             _ => {
-                // Leaf: dispatch (applies the composed xfrm → slide-space
-                // `bounds`), then tag with this group's id + the child's RAW
-                // (child-space) xfrm as `groupBounds`.
                 let before = out.len();
-                walk_sp_tree_child(child, rels, ctx, Some(&g), Some(&group_id), in_layout, out)?;
+                walk_sp_tree_child(child, rels, ctx, Some(&g), None, in_layout, out)?;
                 for slot in &mut out[before..] {
                     if let Some(elem) = slot {
-                        elem.common_mut().group_id = Some(group_id.clone());
                         if let Some(sp_pr) = first(child, "spPr") {
-                            if let Some(xel) = first(sp_pr, "xfrm") {
-                                elem.common_mut().group_bounds =
-                                    Some(to_bounds(&Xform::parse(xel)));
+                            if first(sp_pr, "grpFill").is_some() {
+                                if let Element::Shape(shape) = elem {
+                                    if shape.fill.is_none() {
+                                        shape.fill = group_fill.clone();
+                                    }
+                                }
                             }
                         }
                     }
