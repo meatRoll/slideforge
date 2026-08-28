@@ -1,4 +1,4 @@
-<!-- Synced from docs/pptd-roundtrip-extension.md · self-contained skill copy · re-sync when source changes. Cross-links between pptd-*.md resolve within this folder. -->
+<!-- Synced from docs/pptd-roundtrip-extension.md · self-contained skill copy · re-sync when source changes. -->
 
 # PPTD Round-trip Extension (SlideForge)
 
@@ -29,6 +29,14 @@ Canonical `Border` is `{style, width, color}`.
 ### `Shadow`
 
 Canonical `Shadow` is `{blur, color, offset?}`.
+
+### `LineStyle`
+
+Canonical `LineStyle` is `"solid" | "dash" | "dot"`. SlideForge adds:
+
+| value | meaning |
+|---|---|
+| `sys_dot` | OOXML `prstDash val="sysDot"` — the PowerPoint "system dot" preset. Visually much finer than `dot` (dot diameter and spacing track the line width), so round-tripping it through `dot` visibly coarsens dotted rules (timeline/milestone graphics). `convert` emits `sys_dot` when the source carries `sysDot`; `build` writes `sysDot` back verbatim. Hand-written decks can use it freely — plain PPTD v2 consumers just see an unknown border style. |
 
 | field | type | meaning |
 |---|---|---|

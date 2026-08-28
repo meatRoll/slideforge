@@ -184,8 +184,17 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 - `table` / `chart` 会逐项 `skipped`（不静默，stderr 报告页号+名+原因）。
 - **纯空白 run 的空格会丢**（xmltree 解析器丢弃纯空白 `<a:t>` 文本节点）：
   不同样式的相邻 run 之间若靠空格 run 分隔，可能粘在一起。这是已定位的解析器层限制。
-- 空文本框的空段落会被清掉（正常，形状本身保留）。
+- 空文本框的空段落会被清掉（正常，形状本身保留）；**带显式行距的空段落保留**
+  （模板常用小行距空段做节间距，行距丢失会把后续文字顶出文本框——已在 build 侧修复）。
 - custGeom→SVG path、主题色、文本/形状/图片/图标保真度高。
+
+**PowerPoint ≠ LibreOffice 渲染**（本地验证的盲区，务必注意）：
+- 本地无 PowerPoint 时用 LibreOffice/pdftoppm 预览；它能渲染≠PowerPoint 能渲染。
+  实战案例：line 的 custGeom path 坐标超 int32（`w=91249817500`）时 LibreOffice 归一化后
+  渲染正常，PowerPoint 却把直线画出幻灯片边界。若用户报“PowerPoint 里不对但预览正常”，
+  先查产物 XML 的数值边界（所有 `x/y/cx/cy/path w/h` 应 < 2^31）。
+- 预览正常但用户仍说不对时，不要只靠截图对比，**直接 unzip 产物 diff 原稿 XML**（元素级
+  token diff 最快定位：prstGeom↔custGeom、prstDash 值、坐标数值、schemeClr↔srgbClr 转写）。
 
 → 结论重申：**B 模式只对小改高保真；大改走 C/A。**
 
