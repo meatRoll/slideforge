@@ -1,6 +1,9 @@
 /target
 /temp
 
+# pi agent local state (trust / cache / local settings)
+.pi/
+
 # Editor / OS noise
 .DS_Store
 *.swp
