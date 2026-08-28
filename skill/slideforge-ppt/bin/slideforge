@@ -1,0 +1,62 @@
+#!/bin/sh
+# slideforge-ppt 多平台派发器
+# 按宿主三元组选本技能自带的预编译二进制；找不到则回退到仓库 dev 构建
+# （<repo>/target/release/slideforge），再回退到 PATH。用法：bin/slideforge <args>
+# 调试：SLIDEFORGE_DEBUG=1 bin/slideforge ... 会把所选二进制路径打到 stderr。
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- 检测宿主三元组 -------------------------------------------------------
+OS="$(uname -s 2>/dev/null || echo unknown)"
+MACHINE="$(uname -m 2>/dev/null || echo unknown)"
+case "$OS:$MACHINE" in
+  Darwin:arm64|Darwin:aarch64) TRIPLE=aarch64-apple-darwin ;;
+  Darwin:x86_64)               TRIPLE=x86_64-apple-darwin ;;
+  Linux:x86_64)                TRIPLE=x86_64-unknown-linux-gnu ;;
+  Linux:aarch64|Linux:arm64)   TRIPLE=aarch64-unknown-linux-gnu ;;
+  MINGW*:*|MSYS*:*|CYGWIN*:*)  TRIPLE=x86_64-pc-windows-msvc ;;
+  *)                           TRIPLE= ;;
+esac
+
+BIN=
+
+# 1) 本技能自带的预编译二进制（与平台匹配）
+if [ -n "$TRIPLE" ]; then
+  for cand in "$DIR/slideforge-$TRIPLE" "$DIR/slideforge-$TRIPLE.exe"; do
+    [ -x "$cand" ] && { BIN="$cand"; break; }
+  done
+fi
+
+# 2) 仓库 dev 构建：技能在 <repo>/skill/slideforge-ppt/bin，repo = 上 3 层
+if [ -z "$BIN" ]; then
+  REPO="$DIR/../../.."
+  if [ -d "$REPO/target" ]; then
+    REPO="$(cd "$REPO" && pwd)"
+    for cand in "$REPO/target/release/slideforge" "$REPO/target/release/slideforge.exe"; do
+      [ -x "$cand" ] && { BIN="$cand"; break; }
+    done
+  fi
+fi
+
+# 3) PATH（系统装了 slideforge）
+if [ -z "$BIN" ] && command -v slideforge >/dev/null 2>&1; then
+  BIN=slideforge
+fi
+
+if [ -z "$BIN" ]; then
+  cat >&2 <<EOF
+slideforge: 当前平台 $OS/$MACHINE（三元组 ${TRIPLE:-未知}）无可用二进制。
+  已找预编译：$DIR/slideforge-${TRIPLE:-<triple>}[.exe]
+  也试过 dev 构建：$DIR/../../../target/release/slideforge[.exe]
+  也试过 PATH：slideforge
+  修复任一：
+    1) 进 slideforge 仓库跑  cargo build --release  （host 三元组）
+    2) 把对应平台二进制放到 $DIR/ 下，命名 slideforge-<triple>[.exe]
+       （Linux: x86_64-unknown-linux-gnu / aarch64-unknown-linux-gnu；
+         Windows: x86_64-pc-windows-msvc）
+EOF
+  exit 127
+fi
+
+[ -n "${SLIDEFORGE_DEBUG:-}" ] && echo "slideforge: using $BIN" >&2
+exec "$BIN" "$@"

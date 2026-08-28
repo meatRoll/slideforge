@@ -8,6 +8,7 @@
 slideforge-ppt/
 ├── SKILL.md            pi 技能定义 + 作者剧本（§0–§10）。AI 的主入口。
 ├── README.md           本文件：目录结构与定位说明。
+├── bin/                ◄ 引擎二进制（派发器 + 按三元组命名的预编译产物，见下方专节）
 └── references/         全部参考材料。按需加载（progressive disclosure），
                          AI 只在用到某主题时 `read` 对应文件，不全塞上下文。
     ├── modes.md        ◄ 工作流剧本：A 生成 / B 改（B1 纯 AI、B2 ping-pong
@@ -40,6 +41,30 @@ slideforge-ppt/
             ├── <类别>/<主题>/design.md    ← 按名结构（30，canonical，推荐）
             └── 0N_<类别>/NN/en/<主题>.md  ← 编号结构（30，Kimi 源遗留，备选）
 ```
+
+## 多平台二进制（`bin/`）
+
+技能自带引擎二进制，用户无需装 Rust 工具链即可用：
+
+| 文件 | 说明 |
+|---|---|
+| `bin/slideforge` | POSIX sh 派发器。按宿主三元组（`uname -s`+`uname -m`）选 `slideforge-<triple>`；找不到回退仓库 dev 构建（`<repo>/target/release/slideforge`），再回退 PATH。调试：`SLIDEFORGE_DEBUG=1 bin/slideforge ...` 打印所选路径。无任何可用二进制时退出码 127 并打印修复提示。 |
+| `bin/slideforge-aarch64-apple-darwin` | macOS Apple Silicon 预编译（2.6M） |
+| `bin/slideforge-x86_64-apple-darwin` | macOS Intel 预编译（2.8M；arm64 机靠 Rosetta 也能跑） |
+
+SKILL.md §1 令 `SF=skill/slideforge-ppt/bin/slideforge`，后文命令以 `"$SF"` 调用，AI 无需关心平台。
+
+**加新平台**：在仓库交叉编译后，把产物命名为 `slideforge-<triple>`（Windows 加 `.exe`）放进 `bin/`，派发器自动识别。当前已知的 triple 名：
+
+| 平台 | triple | 编译命令（需对应工具链） |
+|---|---|---|
+| macOS Apple Silicon | `aarch64-apple-darwin` | `cargo build --release`（host） |
+| macOS Intel | `x86_64-apple-darwin` | `cargo build --release --target x86_64-apple-darwin` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | `cargo zigbuild --release --target ...`（需 cargo-zigbuild）或 `cross build ...` |
+| Linux aarch64 | `aarch64-unknown-linux-gnu` | 同上换 target |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `cargo zigbuild --release --target ...`（或 MSVC 工具链） |
+
+> 二进制是 release 构建的**副本**，与仓库 `target/`（gitignored）独立。代码改动后需重新 `cargo build --release` 并 `cp` 覆盖 `bin/slideforge-<triple>`，否则技能里的引擎会落后于实现。
 
 ## 三桶职责
 

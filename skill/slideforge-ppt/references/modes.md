@@ -1,7 +1,7 @@
 # 三模式分步剧本
 
 > 按用户输入确定模式（见 SKILL.md §2）后，读对应小节。命令里 `$SF` 指
-> `slideforge` 二进制（见 SKILL.md §1 bootstrap）。所有路径相对项目根（cwd）。
+> `skill/slideforge-ppt/bin/slideforge` 多平台派发器（见 SKILL.md §1 bootstrap；后文 `$SF` 指代它）。所有路径相对项目根（cwd）。
 
 ---
 

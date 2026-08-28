@@ -2,7 +2,7 @@
 name: slideforge-ppt
 description: Create or edit PowerPoint (.pptx) presentations fully locally and offline via the SlideForge CLI. PPTD (YAML) is the editable layer; PPTX<->PPTD convert bidirectionally, so you can also edit an existing .pptx in place. Use when the user wants to make, modify, restyle, or iterate on a deck without any browser/cloud/login. Three flows - generate from a topic, edit an existing .pptx in place, or restyle using a reference .pptx.
 license: MIT
-compatibility: Requires the `slideforge` Rust binary (built via `cargo build --release` in this project) or `slideforge` on PATH. Works offline. macOS/Windows/Linux.
+compatibility: Bundles prebuilt `slideforge` binaries (macOS arm64/x86_64) in `bin/` with a per-host dispatcher; falls back to a local `cargo build --release` or PATH on Linux/Windows. Works offline. macOS/Windows/Linux.
 metadata:
   project: slideforge
 ---
@@ -28,18 +28,16 @@ metadata:
 
 ---
 
-## 1. Bootstrap：定位 `slideforge` 二进制（每个会话跑一次）
+## 1. Bootstrap：定位 `slideforge` 派发器（每个会话跑一次）
 
-技能假定在本项目（slideforge）内使用，cwd = 项目根。优先用已编译的 release 二进制：
+技能自带 macOS arm64/x86_64 预编译二进制（在 `skill/slideforge-ppt/bin/` 下，按三元组命名），由多平台派发器按宿主自动选；Linux/Windows 无预编译时回退到仓库 dev 构建（`cargo build --release`）或 PATH：
 
 ```bash
-# 若 target/release/slideforge 不存在就先构建（一次性）
-[ -x target/release/slideforge ] || cargo build --release
-SF=target/release/slideforge            # 后文命令以 $SF 指代
-"$SF" --version                          # 确认可用
+SF=skill/slideforge-ppt/bin/slideforge   # 派发器；后文命令以 $SF 指代
+"$SF" --version                           # 确认可用（应输出 slideforge 0.1.0）
 ```
 
-> 若用户把 `slideforge` 装到了 PATH，直接 `SF=slideforge`。命令示例统一写 `"$SF"`。
+> 派发器找不到合适二进制会退出码 127 并打印修复提示：进仓库 `cargo build --release`（host 三元组），或把对应平台二进制命名为 `slideforge-<triple>` 放进 `bin/`。用户把 `slideforge` 装到 PATH 时派发器也会兜到。命令示例统一写 `"$SF"`。
 
 ---
 
