@@ -94,6 +94,9 @@ B 内部分 **B1 纯AI改 / B2 用户也改PPTX** 两个子模式，识别见 SK
    sha256of <用户给的>.pptx > <work_dir>/.src.hash             # build 后也是 sync point
    ```
    小迭代**不重新 convert**，直接在 `<work_dir>` 上改完 build。
+   - **覆盖前 skip 守卫（同 §2.3 铁律 6）**：若 step 1 convert 报了 skip（table/chart 等），
+     覆盖原稿前**必须先告诉用户**“会丢失 skip 的 X，原稿不可恢复”，让用户决定备份/转 C；
+     未确认前先 build 到 `<原稿>-wip.pptx`，别直接覆盖。
 
 5. **交付**：告诉用户“已更新 <那一份>.pptx”。**诚实标注 convert 缺口**（见 SKILL.md §4）：
    若原稿有 table/chart 被 skip，产物里没有它们——要么用户接受，要么转 C 模式补。

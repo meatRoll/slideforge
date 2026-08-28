@@ -160,7 +160,7 @@ Kimi `open-kimi-ppt` step2/3 方法论，后端无关。动笔前锁四轴，写
    ↓ 有 issue → 修 PPTD → 重 check
 "$SF" build <deck.pptd> --output <out>.pptx
    ↓ build 内部先校验，不过则拒绝写文件（退出码 2）
-(可选) qlmanage -t -s 1024 <out>.pptx -o /tmp  # Quick Look 看第 1 页
+(可选) qlmanage -t -s 1024 <out>.pptx -o /tmp  # Quick Look 看第 1 页（仅 macOS）
    ↓
 给用户 .pptx 路径 + 结构摘要 → 收集反馈 → 回到"编辑 PPTD"
 ```
@@ -192,7 +192,7 @@ Kimi `open-kimi-ppt` step2/3 方法论，后端无关。动笔前锁四轴，写
 
 ## 5. 视觉 QA 的真相（诚实设预期）
 
-- **Quick Look 只渲染第 1 页缩略图**：`qlmanage -t -s 1024 x.pptx -o /tmp` → 只能看封面。
+- **Quick Look 只渲染第 1 页缩略图**：`qlmanage -t -s 1024 x.pptx -o /tmp` → 只能看封面（仅 macOS；Linux/Windows 无 qlmanage，跳过此步，直接让用户在 PowerPoint/WPS 打开）。
   只适合单页肉眼核对。
 - **多页视觉检查**：让用户在 PowerPoint / Keynote / WPS 打开产物。本技能无 LibreOffice，
   不能批量渲染所有页。
@@ -248,7 +248,7 @@ Kimi `open-kimi-ppt` step2/3 方法论，后端无关。动笔前锁四轴，写
 
 ## 9. 交付
 
-最终 `build` 成功 → 把 **.pptx 绝对路径**给用户，并附一旬结构摘要（N 页、每页主要元素）。
+最终 `build` 成功 → 把 **.pptx 绝对路径**给用户，并附一句结构摘要（N 页、每页主要元素）。
 **保留 PPTD 目录**，告诉用户"想再改就继续说，我在原 PPTD 上改完重新 build"。
 明确点出已知限制（如某页用了 table 但已手拼替代；某处 inter-run 空格可能丢失）。
 

@@ -34,7 +34,7 @@ pub enum Command {
         /// Path to the `.pptd` main entry file.
         file: PathBuf,
     },
-    /// Compile a PPTD project into a `.pptx` package (not implemented yet).
+    /// Compile a PPTD project into a `.pptx` package.
     Build {
         /// Path to the `.pptd` main entry file.
         file: PathBuf,
