@@ -1781,15 +1781,28 @@ fn map_sp(
         ctx.para_margin_top = saved_mtop;
         ctx.para_line_spacing = saved_para;
         ctx.defaults = saved_defaults;
-        // Placeholders that omit their own `<a:bodyPr>` inherit the layout
-        // placeholder template's vertical anchor (title templates are
-        // `anchor="ctr"`); without it the box would sit top-aligned.
+        // Placeholders that omit their own `<a:bodyPr anchor=…>` inherit
+        // the layout placeholder template's vertical anchor (title templates
+        // are `anchor="ctr"`); without it the box would sit top-aligned.
+        // `text_content` already fills `align.vertical` with a default `Top`
+        // when the bodyPr carries no anchor, so we can't gate on
+        // `c.align.is_none()` — re-check the source bodyPr and override the
+        // vertical only when it had no explicit anchor.
+        let body_anchor_explicit = first(el, "txBody")
+            .and_then(|tb| first(tb, "bodyPr"))
+            .and_then(|bp| attr(bp, "anchor"))
+            .is_some();
         if let (Some(anchor), Some(c)) = (proto_anchor, content.as_mut()) {
-            if c.align.is_none() {
-                c.align = Some(Alignment {
-                    horizontal: HorizontalAlign::default(),
-                    vertical: anchor,
-                });
+            if !body_anchor_explicit {
+                match c.align.as_mut() {
+                    Some(a) => a.vertical = anchor,
+                    None => {
+                        c.align = Some(Alignment {
+                            horizontal: HorizontalAlign::default(),
+                            vertical: anchor,
+                        });
+                    }
+                }
             }
         }
         if let Some(ref mut c) = content {
