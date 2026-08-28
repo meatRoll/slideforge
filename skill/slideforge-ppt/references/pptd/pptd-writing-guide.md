@@ -26,19 +26,16 @@
 - **SlideForge** 是用 Rust 写的 PPTD 编译引擎：解析 → 校验 → 编译成可编辑 PPTX，
   并且能把任意 PPTX 反向编译回 PPTD 项目。**不依赖浏览器、不依赖网络、无需登录**。
 
-与 Moonshot `open-kimi-ppt` 技能相比，本仓库的差异点：
+本仓库 PPTD 的特点：
 
-| 维度 | SlideForge（本仓库） | open-kimi-ppt |
-|---|---|---|
-| 编译方式 | 纯 Rust 本地编译，无需浏览器/网络 | 经 Kimi 浏览器编辑器导出 |
-| 可编程性 | 强类型 AST + 语义校验器 + 反向解析 | 黑盒导出 |
-| 反向解析 | `convert` 把任意 PPTX → PPTD（含 custGeom↔SVG path） | 仅导入后在浏览器内编辑 |
-| 校验 | `check` 一次列出全部 `Diagnostic` | 依赖导出后视觉 QA |
-| 形状库/字体库/设计系统 | 需另查 Moonshot `reference/` | 自带 `shapes.md` / `fonts.md` / `design_system/` |
+- **编译方式**：纯 Rust 本地编译，无需浏览器/网络/登录。
+- **可编程性**：强类型 AST + 语义校验器 + 反向解析（`convert`）。
+- **反向解析**：`convert` 把任意 PPTX → PPTD（含 custGeom↔SVG path），故"改已有 PPTX"是一等公民。
+- **校验**：`check` 一次列出全部 `Diagnostic`；`build` 校验不过则拒绝写文件。
+- **形状库/字体库/设计系统**：随仓库/技能自带 `shapes.md`（177 个 shapeName）/`fonts.md`/`design_system/`，无需外查。
 
-> 结论：**写 PPTD 时用本指南 + 本仓库的 `check`/`build` 闭环；需要查 177 个形状
-> 的 `shapeName`/`adjustments` 或可用字体时，去查 Moonshot 的 `reference/shapes.md`
-> 与 `reference/fonts.md`。**
+> 写 PPTD 时用本指南 + 本仓库的 `check`/`build` 闭环；需要查形状 `shapeName`/`adjustments`
+> 或可用字体时，查本仓库自带的 `shapes.md`/`fonts.md`（技能里在 `references/pptd/`）。
 
 ---
 

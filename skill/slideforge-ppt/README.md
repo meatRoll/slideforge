@@ -18,14 +18,14 @@ slideforge-ppt/
     │   ├── pptd-writing-guide.md     写作指南：字段/样式优先级/富文本/陷阱。
     │   │                              写 `.page` 前必读（§2 支持矩阵 + §7 速查 + §11 do/don't）
     │   ├── pptd-layout-extension.md  layouts 扩展（`Presentation.layouts`/`Page.layout`/
-    │   │                              `Text.placeholder`，本仓库对 Kimi PPTD 的扩展）
+    │   │                              `Text.placeholder`，本仓库对 PPTD 的扩展）
     │   ├── pptd-group-extension.md   group 扩展（`groupId`/`groupBounds`/`Page.groups`，本仓库扩展）
     │   ├── pptd-roundtrip-extension.md round-trip 扩展字段（`Text.fill`/`Text.border`、
     │   │                              `bulletChar`/`listMargin`/listIndent`、各 margin、
     │   │                              `autofit`/`softEdge`/`Shadow` 等；保 OOXML 往返保真）
     │   ├── shapes.md                形状库（177 个 shapeName）。pptd-spec.md 的 `./shapes.md` 指向此。
     │   └── fonts.md                 字体选择原则。pptd-spec.md 的 `./fonts.md` 指向此。
-    └── design/         ◄ 设计方法论 + 主题预设（源自 Kimi open-kimi-ppt，后端无关）
+    └── design/         ◄ 设计方法论 + 主题预设（后端无关；来源见各文件/目录头部注释）
         ├── slides_categories.md      PPT 设计方法论 + 内容纪律（四轴分析、反套话、
         │                              禁卡片堆层级/等分网格/彩虹配色/编造数据）
         ├── slides_categories/        7 个场景文档：
@@ -39,7 +39,7 @@ slideforge-ppt/
         ├── general-poster.md          海报/信息图设计指南（仅海报/单页视觉任务读）
         └── design_system/            主题预设库（60 份；用户显式指定才用，见下方双结构说明）
             ├── <类别>/<主题>/design.md    ← 按名结构（30，canonical，推荐）
-            └── 0N_<类别>/NN/en/<主题>.md  ← 编号结构（30，Kimi 源遗留，备选）
+            └── 0N_<类别>/NN/en/<主题>.md  ← 编号结构（30，备选）
 ```
 
 ## 多平台二进制（`bin/`）
@@ -76,10 +76,10 @@ SKILL.md §1 令 `SF=skill/slideforge-ppt/bin/slideforge`，后文命令以 `"$S
 
 ## `design_system/` 双结构说明
 
-Kimi 源里就**两套并行**组织，本技能原样保留（`都要`）。两套都是「5 类 × 6 主题 = 30」的设计方向参考，**选其一即可**：
+design_system 有**两套并行**组织（上游源遗留，本技能原样保留）。两套都是「5 类 × 6 主题 = 30」的设计方向参考，**选其一即可**：
 
 - **按名结构** `<类别>/<主题>/design.md`（canonical，推荐）——路径语义化，如 `design_system/consulting/indigo-due-diligence/design.md`。5 类：`academic` `consulting` `finance` `promotion` `work`。
-- **编号结构** `0N_<类别>/NN/en/<主题>.md`（Kimi 源遗留，备选）——如 `design_system/01_strategy/02/en/indigo-due-diligence.md`。5 类：`01_strategy` `02_business` `03_work` `04_promotion` `05_academic`。`en/` 子目录为本地化层。
+- **编号结构** `0N_<类别>/NN/en/<主题>.md`（备选）——如 `design_system/01_strategy/02/en/indigo-due-diligence.md`。5 类：`01_strategy` `02_business` `03_work` `04_promotion` `05_academic`。`en/` 子目录为本地化层。
 
 两类别的主题名**部分重叠、部分不同**（如 `indigo-due-diligence` 两套都有，`apricot-white-brief` 仅按名结构有）。**定位某主题的 design.md 时优先用按名结构**；编号结构作为兜底。两套读法相同：取所选主题的 `design.md` 作为该 deck 的设计方向（配色/字体/排版基调）。
 
@@ -91,7 +91,7 @@ Kimi 源里就**两套并行**组织，本技能原样保留（`都要`）。两
 
 ## 与仓库 `docs/` 的同步
 
-`references/pptd/` 下的 `pptd-*.md` 与仓库 `docs/pptd-*.md` **逐份对应**（顶部有同步注释标明来源）。`docs/` 改动后需重同步 references/ 副本，否则技能里的规范会落后于实现。`shapes.md` / `fonts.md` / `design/` 下文件源自 Kimi，与仓库 `docs/` 无对应关系，不参与同步。
+`references/pptd/` 下的 `pptd-*.md` 与仓库 `docs/pptd-*.md` **逐份对应**（顶部有同步注释标明来源）。`docs/` 改动后需重同步 references/ 副本，否则技能里的规范会落后于实现。`shapes.md` / `fonts.md` / `design/` 下文件源自上游（见各头部注释/目录 README），与仓库 `docs/` 无对应关系，不参与同步。
 
 ## 技能发现（本地，不入库）
 

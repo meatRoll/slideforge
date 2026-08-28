@@ -12,8 +12,7 @@ metadata:
 完全本地、离线地创建或修改 PowerPoint(.pptx)。以 SlideForge CLI 为引擎：
 **PPTD（YAML）是可编辑中间层，PPTX↔PPTD 双向可转**。不依赖浏览器、网络、登录。
 
-> 与 Kimi `open-kimi-ppt` 的根本差异：Kimi 只能"从零生成 + 浏览器导出"；
-> 本技能因 `convert` 能把任意 PPTX 反编译成 PPTD，**"改已有 PPTX"是一等公民**。
+> 因 `convert` 能反编译任意 PPTX 成 PPTD，**"改已有 PPTX"是一等公民**——不止"从零生成"，也能就地改已有文件。
 
 ---
 
@@ -41,7 +40,7 @@ SF=skill/slideforge-ppt/bin/slideforge   # 派发器；后文命令以 $SF 指�
 
 ---
 
-## 2. 入口分流 —— 与 Kimi 的关键差异
+## 2. 入口分流
 
 ### 2.0 一级分流：A / B / C
 
@@ -137,7 +136,7 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 
 ### 2.5 需求四轴分析 + 内容纪律（A/C 生成前必做）
 
-Kimi `open-kimi-ppt` step2/3 方法论，后端无关。动笔前锁四轴，写作守纪律。
+业界通用 PPT 方法论，后端无关。动笔前锁四轴，写作守纪律。
 
 **四轴**（任一不明就问用户，用 ask/clarification）：
 1. **目的**：A 生成 / B 改 / C 借风格（见 §2.0）。
@@ -232,17 +231,17 @@ Kimi `open-kimi-ppt` step2/3 方法论，后端无关。动笔前锁四轴，写
   ← 最重要，写 .page 前必读其 §2 支持矩阵 + §7 元素速查 + §11 do/don't。
 - **三模式分步剧本（含 B1/B2 子模式）**：`skill/slideforge-ppt/references/modes.md`
   ← 进入某模式时加载对应小节；B 模式按 B1/B2 分支。
-- **layouts 扩展**（`Presentation.layouts`/`Page.layout`/`Text.placeholder`，本仓库对 Kimi PPTD 的扩展）：`skill/slideforge-ppt/references/pptd/pptd-layout-extension.md`
+- **layouts 扩展**（`Presentation.layouts`/`Page.layout`/`Text.placeholder`，本仓库对 PPTD 的扩展）：`skill/slideforge-ppt/references/pptd/pptd-layout-extension.md`
 - **group 扩展**（`groupId`/`groupBounds`/`Page.groups`，本仓库扩展）：`skill/slideforge-ppt/references/pptd/pptd-group-extension.md`
 - **round-trip 扩展字段**（`Text.fill`/`Text.border`、`bulletChar`/`listMargin`/`listIndent`、`marginLeft`/`marginRight`/`marginBottom`、`autofit`、`softEdge`、`Shadow.inner`/`scale` 等；保 OOXML 往返保真）：`skill/slideforge-ppt/references/pptd/pptd-roundtrip-extension.md`
 - **PPTD 规范语义**（权威，有出入以此为准）：`skill/slideforge-ppt/references/pptd/pptd-spec.md`
 - **PPT 设计方法论（后端无关，A/C 生成前读）**：`skill/slideforge-ppt/references/design/slides_categories.md`（+ `design/slides_categories/` 下 7 个场景文档：分析决策/商业提案/管理汇报/学术/教育/技术工程/品牌创意）。每页明确读者任务、分页节奏、禁卡片堆层级/等分网格/彩虹配色/编造数据、场景→对应风格文档。
 - **海报/信息图设计**（仅海报/单页视觉任务读）：`skill/slideforge-ppt/references/design/general-poster.md`
-- **主题预设库**（无主题参考时，from-scratch 生成可挑一个；用户显式指定才用）：`skill/slideforge-ppt/references/design/design_system/`（源自 Kimi；按 `design/design_system/<类别>/<主题>/design.md` 组织，读所选主题的 design.md 作为该 deck 设计方向）
+- **主题预设库**（无主题参考时，from-scratch 生成可挑一个；用户显式指定才用）：`skill/slideforge-ppt/references/design/design_system/`（按 `design/design_system/<类别>/<主题>/design.md` 组织，读所选主题的 design.md 作为该 deck 设计方向；来源见该目录 README）
 - **可运行样例**：`docs/samples/min/`（仓库内；AI 的 CWD 即仓库根，可直接 `check`/`build` 验证）
-- 形状库(177 个 shapeName)/字体库（自包含副本）：`skill/slideforge-ppt/references/pptd/shapes.md`、`skill/slideforge-ppt/references/pptd/fonts.md`（源自 Kimi open-kimi-ppt/reference；pptd-spec.md 的 `./shapes.md`/`./fonts.md` 链接在 `pptd/` 内可解析）。
+- 形状库(177 个 shapeName)/字体库（自包含副本）：`skill/slideforge-ppt/references/pptd/shapes.md`、`skill/slideforge-ppt/references/pptd/fonts.md`（pptd-spec.md 的 `./shapes.md`/`./fonts.md` 链接在 `pptd/` 内可解析；来源见各文件头部注释）。
 
-> **为何嵌入**：本仓库的 PPTD 是在 Kimi PPTD v2 之上做了扩展（layouts/group/round-trip），AI 写 PPTD 必须照**本仓库的扩展版**规范来写，所以把文档随技能一起带上，脱离 `docs/` 也能正确写作。`docs/` 改动后需重同步 `skill/slideforge-ppt/references/pptd/pptd-*.md`（见各文件顶部同步注释）。
+> **为何嵌入**：本仓库的 PPTD 在标准 PPTD 之上做了扩展（layouts/group/round-trip），AI 写 PPTD 必须照**本仓库的扩展版**规范来写，所以把文档随技能一起带上，脱离 `docs/` 也能正确写作。`docs/` 改动后需重同步 `skill/slideforge-ppt/references/pptd/pptd-*.md`（见各文件顶部同步注释）。
 
 ---
 

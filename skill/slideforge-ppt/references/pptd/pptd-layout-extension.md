@@ -213,8 +213,8 @@ accepted.
 
 - Extension fields: `Presentation.layouts`, `Page.layout`, `Text.placeholder`,
   `LayoutDef`, `PlaceholderDef`.
-- Canonical PPTD v2 consumers that ignore unknown YAML fields (Kimi browser
-  writer; serde with `deny_unknown_fields` off) drop layout grouping but keep
+- Canonical PPTD v2 consumers that ignore unknown YAML fields (browser-based
+  PPTD writers; serde with `deny_unknown_fields` off) drop layout grouping but keep
   every page's content (flattened). No data loss.
 - This doc marks which fields are SlideForge-only so AI editors know the
   boundary.
