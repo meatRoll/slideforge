@@ -3,7 +3,7 @@
 # PPTD 写作参考指南（面向 AI）
 
 > 给 AI agent 用的 PPTD 写作规范与工作流指南。读完它，你应该能用
-> [SlideForge](../../../README.md) 这个本地编译器独立产出一个**可校验、可编译成
+> [SlideForge](../../../../README.md) 这个本地编译器独立产出一个**可校验、可编译成
 > 可编辑 PPTX** 的 PPTD 项目。
 >
 > 本指南以本仓库（`slideforge`，Rust 实现的 PPTD→PPTX 编译引擎）为操作骨干。
@@ -639,8 +639,8 @@ cargo run -- convert 某模板.pptx ./converted
 ## 13. 参考资料
 
 - 本仓库
-  - [`README.md`](../../../README.md)：架构、命名约定、能力清单与路线图
-  - [`docs/pptx-layout-synthesis.md`](../../../docs/pptx-layout-synthesis.md)：master/layout 合成骨架策略
+  - [`README.md`](../../../../README.md)：架构、命名约定、能力清单与路线图
+  - [`docs/pptx-layout-synthesis.md`](../../../../docs/pptx-layout-synthesis.md)：master/layout 合成骨架策略
   - [`docs/pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md)：SlideForge round-trip 扩展字段（Text/TextContent/Border/Shadow/Image 等的额外字段）
   - `tests/fixtures/demo/`、`tests/fixtures/buildable/`：可运行样例
   - 源码：`src/pptd/`（AST+parser+validate）、`src/pptx/`（OPC+render+writer+import）

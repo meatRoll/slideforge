@@ -24,7 +24,7 @@
    - 样板见 `docs/samples/min/deck.pptd` 与 `tests/fixtures/demo/`。
 
 4. **并行写 `mydeck/pages/*.page`**：每页一文件。一次写多页减少往返。
-   - 写前必读 `skill/slideforge-ppt/references/pptd-writing-guide.md` 的 §7 元素速查 + §11 do/don't。
+   - 写前必读 `skill/slideforge-ppt/references/pptd/pptd-writing-guide.md` 的 §7 元素速查 + §11 do/don't。
    - 含 `style="..."` 的富文本一律用块标量 `|`，避免 YAML 误解析。
    - `elementId` 页内唯一；`bounds` 之和不超过画布。
 
