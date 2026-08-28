@@ -223,7 +223,7 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 - **round-trip 扩展字段**（`Text.fill`/`Text.border`、`bulletChar`/`listMargin`/`listIndent`、`marginLeft`/`marginRight`/`marginBottom`、`autofit`、`softEdge`、`Shadow.inner`/`scale` 等；保 OOXML 往返保真）：`skill/slideforge-ppt/references/pptd-roundtrip-extension.md`
 - **PPTD 规范语义**（权威，有出入以此为准）：`skill/slideforge-ppt/references/pptd-spec.md`
 - **可运行样例**：`docs/samples/min/`（仓库内；AI 的 CWD 即仓库根，可直接 `check`/`build` 验证）
-- 形状库(177 个 shapeName)/字体库：Moonshot `reference/`（若用户已集成；spec 内 `shapes.md`/`fonts.md` 为悬空链接，查 Moonshot reference 为主）。
+- 形状库(177 个 shapeName)/字体库（自包含副本）：`skill/slideforge-ppt/references/shapes.md`、`skill/slideforge-ppt/references/fonts.md`（源自 Kimi open-kimi-ppt/reference；pptd-spec.md 的 `./shapes.md`/`./fonts.md` 链接在 references/ 内可解析）。
 
 > **为何嵌入**：本仓库的 PPTD 是在 Kimi PPTD v2 之上做了扩展（layouts/group/round-trip），AI 写 PPTD 必须照**本仓库的扩展版**规范来写，所以把文档随技能一起带上，脱离 `docs/` 也能正确写作。`docs/` 改动后需重同步 `skill/slideforge-ppt/references/pptd-*.md`（见各文件顶部同步注释）。
 
