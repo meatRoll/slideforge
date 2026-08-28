@@ -750,10 +750,14 @@ fn render_text(
     };
 
     // Empty typed placeholder: emit a minimal empty txBody so the renderer
-    // shows the placeholder prompt ("Click to edit title").
+    // shows the placeholder prompt ("Click to edit title"). The bodyPr
+    // stays empty (`<a:bodyPr/>`) to match the source — an explicit anchor
+    // on an empty placeholder makes WPS inherit the layout's bodyPr anchor
+    // for the prompt, shifting it; an empty bodyPr uses the renderer's
+    // default (top-anchored prompt), matching the source.
     if is_empty_placeholder {
         xml.start("p:txBody", &[]);
-        xml.leaf("a:bodyPr", &[("anchor", anchor), ("wrap", "square")]);
+        xml.leaf("a:bodyPr", &[]);
         emit_lst_style(xml, &style, true);
         xml.leaf("a:p", &[]);
         xml.end("p:txBody");
