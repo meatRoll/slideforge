@@ -140,34 +140,96 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
     let mut pages = Vec::with_capacity(slide_parts.len());
     let mut skipped = Vec::new();
     let mut element_count = 0usize;
-    // SlideForge layout extension: one `LayoutDef` per distinct source
-    // layout, shared by every slide that references it. Decorative shapes,
+    // SlideForge layout extension: one `LayoutDef` per source slideLayout,
+    // shared by every slide that references it. Decorative shapes,
     // background and placeholder templates live here instead of being
     // flattened onto each slide.
+    //
+    // Every slideLayout of the master is converted — including layouts no
+    // slide references — so editing a slide onto a different layout in
+    // PowerPoint and re-converting doesn't silently drop the old layout's
+    // definition (the ct-* elements of an orphaned coverThanks etc.).
     let mut layouts: HashMap<String, LayoutDef> = HashMap::new();
     let mut layout_cache: HashMap<String, LayoutBuild> = HashMap::new();
+    let mut used_layout_keys: BTreeSet<String> = BTreeSet::new();
+    {
+        // Every slideLayout of every slideMaster (decks commonly carry
+        // several masters; the unused layouts live on the non-first ones).
+        let master_parts = rels_targets(&mut zip, &presentation_part, "slideMaster");
+        let mut master_layout_parts: Vec<String> = Vec::new();
+        for master in &master_parts {
+            for lp in rels_targets(&mut zip, master, "slideLayout") {
+                if !master_layout_parts.contains(&lp) {
+                    master_layout_parts.push(lp);
+                }
+            }
+        }
+        // Layouts referenced by at least one slide first (stable part order),
+        // then the unreferenced remainder — so slide-relevant keys win name
+        // collisions with orphaned layouts.
+        let referenced: BTreeSet<String> = slide_parts
+            .iter()
+            .filter_map(|s| first_rels_target(&mut zip, s, "slideLayout"))
+            .collect();
+        let mut ordered: Vec<&String> = master_layout_parts
+            .iter()
+            .filter(|p| referenced.contains(*p))
+            .collect();
+        ordered.extend(
+            master_layout_parts
+                .iter()
+                .filter(|p| !referenced.contains(*p)),
+        );
+        for part in ordered {
+            let lp = part.as_str();
+            if layout_cache.contains_key(lp) {
+                continue;
+            }
+            let master_of_layout = first_rels_target(&mut zip, lp, "slideMaster");
+            let key = reserve_layout_key(
+                layout_display_name(&mut zip, lp).unwrap_or_else(|| layout_key(lp)),
+                &mut used_layout_keys,
+            );
+            let built = build_layout(
+                &mut zip,
+                lp,
+                master_of_layout.as_deref(),
+                &slots,
+                &mut media,
+                &mut skipped,
+                key,
+            )?;
+            layouts.insert(built.key.clone(), built.def.clone());
+            layout_cache.insert(lp.to_string(), built);
+        }
+    }
 
     for (idx, part) in slide_parts.iter().enumerate() {
         let page_no = idx + 1;
         let slide = parse_part(&mut zip, part)?;
         let (rels, layout_part) = parse_slide_rels(&mut zip, part);
-        let master_part = layout_part
-            .as_deref()
-            .and_then(|l| first_rels_target(&mut zip, l, "slideMaster"));
 
         // Build (or reuse) the layout for this slide's source layout part:
         // decorative shapes + placeholders + per-layout defaults, captured
         // once. The slide only keeps its own content + a `layout` reference.
+        // Layouts absent from the master listing (custom-maintained decks,
+        // quirky packs) are converted lazily here, same as before.
         let (layout_field, lprotos, ldefaults, lfonts, lfbg) = match layout_part.as_deref() {
             Some(lp) => {
                 if !layout_cache.contains_key(lp) {
+                    let master_of_layout = first_rels_target(&mut zip, lp, "slideMaster");
+                    let key = reserve_layout_key(
+                        layout_display_name(&mut zip, lp).unwrap_or_else(|| layout_key(lp)),
+                        &mut used_layout_keys,
+                    );
                     let built = build_layout(
                         &mut zip,
                         lp,
-                        master_part.as_deref(),
+                        master_of_layout.as_deref(),
                         &slots,
                         &mut media,
                         &mut skipped,
+                        key,
                     )?;
                     layouts.insert(built.key.clone(), built.def.clone());
                     layout_cache.insert(lp.to_string(), built);
@@ -817,8 +879,10 @@ struct LayoutBuild {
     fallback_bg: Option<Fill>,
 }
 
-/// Derive a stable PPTD layout key from the layout part path, e.g.
-/// `ppt/slideLayouts/slideLayout13.xml` → `layout_13`.
+/// Derive a fallback PPTD layout key from the layout part path, e.g.
+/// `ppt/slideLayouts/slideLayout13.xml` → `layout_13`. Only used when the
+/// layout part carries no `<p:cSld name>` (semantic names like `cover` /
+/// `content` are preferred — see [`layout_display_name`).
 fn layout_key(layout_part: &str) -> String {
     let stem = layout_part.rsplit('/').next().unwrap_or(layout_part);
     let stem = stem.trim_end_matches(".xml");
@@ -835,6 +899,56 @@ fn layout_key(layout_part: &str) -> String {
     } else {
         format!("layout_{digits}")
     }
+}
+
+/// Semantic layout key: the `<p:cSld name>` of the slideLayout part (e.g.
+/// `cover`, `coverThanks`, `content`). Round-tripping through part-number
+/// keys (`layout_13`) broke decks whose PPTD sources are maintained against
+/// the template's own layout vocabulary — the produced keys never matched,
+/// inviting wrong-key edits. Falls back to [`layout_key`] when the part has
+/// no name.
+fn layout_display_name(zip: &mut zip::ZipArchive<fs::File>, layout_part: &str) -> Option<String> {
+    let el = parse_part(zip, layout_part).ok()?;
+    let c_sld = first(&el, "cSld")?;
+    let name = attr(&c_sld, "name")?.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// Reserve a unique PPTD layout key: template names can repeat across
+/// masters, and the fallback `layout_N` form can collide with a semantic
+/// name. Duplicates get a `_2`, `_3`… suffix.
+fn reserve_layout_key(key: String, used: &mut BTreeSet<String>) -> String {
+    if used.insert(key.clone()) {
+        return key;
+    }
+    let base = key;
+    for n in 2.. {
+        let key = format!("{base}_{n}");
+        if used.insert(key.clone()) {
+            return key;
+        }
+    }
+    unreachable!("layout key sequence terminates")
+}
+
+/// All relationship targets of `part` whose type ends with `type_suffix`,
+/// in rels-file order (e.g. every slideLayout of a slideMaster).
+fn rels_targets(zip: &mut zip::ZipArchive<fs::File>, part: &str, type_suffix: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rels_root) = parse_part(zip, &rels_part(part)) {
+        for rel in children(&rels_root, "Relationship") {
+            let ty = attr(rel, "Type").unwrap_or_default();
+            let target = attr(rel, "Target").unwrap_or_default();
+            if ty.ends_with(type_suffix) {
+                out.push(resolve_target(part, target));
+            }
+        }
+    }
+    out
 }
 
 /// Convert a captured layout placeholder proto into the serialisable
@@ -892,9 +1006,8 @@ fn build_layout(
     slots: &SlotColors,
     media: &mut BTreeMap<String, String>,
     skipped: &mut Vec<Skipped>,
+    key: String,
 ) -> Result<LayoutBuild> {
-    let key = layout_key(layout_part);
-
     // Per-layout defaults/fonts/bg from the layout's master (same chain the
     // slide would resolve).
     let (defaults, fonts, fallback_bg) = match master_part {

@@ -161,8 +161,16 @@ placeholder without losing inheritance of the fields it omits.
 ## 9. PPTX → PPTD (`convert`)
 
 - Group slides by their source `slideLayoutN.xml` → one `layouts[key]` per
-  distinct layout (key auto-derived from the layout part name, e.g.
-  `slideLayout13` → `layout_13`, or a `pageType` hint when available).
+  distinct layout. **Every slideLayout of every slideMaster is converted**,
+  including layouts no slide references — otherwise re-pointing a slide onto
+  a different layout in PowerPoint (and re-converting) would silently drop
+  the orphaned layout's definition.
+- Layout **key**: the semantic `<p:cSld name="…">` of the layout part
+  (e.g. `cover` / `content` / `标题幻灯片`), so converted keys match the
+  vocabulary PowerPoint shows and hand-maintained PPTD sources use; falls
+  back to `layout_13`-style part-derived keys when the part has no name.
+  Duplicate names get a `_2`, `_3`… suffix; layouts referenced by slides
+  win collisions over orphaned ones.
 - `layout.background` — the layout's `<p:bg>` (or the master's, or a promoted
   full-bleed decorative picture, see §10).
 - `layout.elements` — the **master** spTree decorative shapes **+** the
