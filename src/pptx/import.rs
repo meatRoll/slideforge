@@ -210,6 +210,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
             layout_key: layout_field.clone(),
             groups: HashMap::new(),
             group_seq: 0,
+            in_master: false,
         };
         let page = extract_slide(&slide, part, &mut zip, &mut ctx, &rels)?;
         element_count += page.elements.len();
@@ -322,6 +323,12 @@ struct PageCtx<'a> {
     groups: HashMap<String, crate::pptd::elements::GroupDef>,
     /// Monotonic group-id counter (per page).
     group_seq: u32,
+    /// True while walking the slideMaster's spTree (vs the slideLayout's):
+    /// master placeholders are captured as protos for the inheritance chain
+    /// but NOT emitted into the layout's `elements` (the layout already
+    /// inherits them; duplicating would put two `<p:ph type="title">` in
+    /// the rebuilt layout spTree).
+    in_master: bool,
 }
 
 impl<'a> PageCtx<'a> {
@@ -922,13 +929,18 @@ fn build_layout(
             layout_key: None,
             groups: HashMap::new(),
             group_seq: 0,
+            in_master: false,
         };
         // Master decorative shapes + placeholders (master inherits to
-        // every slide via this layout).
+        // every slide via this layout). Master placeholders are captured as
+        // protos only — NOT emitted into the layout's elements (the layout
+        // inherits them via the placeholder chain; duplicating would put two
+        // `<p:ph type="title">` in the rebuilt layout spTree).
         if let Some(master) = master_part {
             if let Ok(master_el) = parse_part(zip, master) {
                 if let Some(tree) = first(&master_el, "cSld").and_then(|c| first(c, "spTree")) {
                     let master_rels = layout_rels(zip, master);
+                    lctx.in_master = true;
                     for child in tree.children.iter().filter_map(|n| n.as_element()) {
                         let mut generated = Vec::new();
                         walk_sp_tree_child(
@@ -942,6 +954,7 @@ fn build_layout(
                         )?;
                         elements.extend(generated.into_iter().flatten());
                     }
+                    lctx.in_master = false;
                 }
             }
         }
@@ -1612,12 +1625,22 @@ fn map_sp(
     // geometry + `lstStyle` defaults so slide placeholders that omit
     // `<a:xfrm>` (the OOXML placeholder inheritance chain) can inherit it.
     // Layout entries overwrite master entries (layout wins, per the chain).
+    // After capturing the proto, fall through so the placeholder's prompt
+    // text + lstStyle are also captured as a Text element in the layout's
+    // spTree — the writer re-emits it as `<p:ph type>` so slide placeholders
+    // inherit the prompt + style (e.g. the empty slide title shows the
+    // layout's "单击此处编辑标题" in blue/bold 24pt, not the master default).
     if in_layout {
         if let Some(ph_el) = ph {
             if let Some(proto) = placeholder_proto(el, ctx.slots) {
                 ctx.layout_placeholders.insert(ph_key(ph_el), proto);
             }
-            return Ok(None);
+            // Master placeholders are captured as protos only — the layout
+            // inherits them; emitting them into the layout spTree would
+            // duplicate (e.g. two `<p:ph type="title">`).
+            if ctx.in_master {
+                return Ok(None);
+            }
         }
     }
     let ext = nv_pr

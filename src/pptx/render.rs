@@ -31,6 +31,10 @@ pub struct RenderCtx<'a> {
     pub media: Vec<String>,
     /// Media source → pixel dimensions (for `contain`/`cover` cropping).
     pub image_sizes: Vec<(String, ImageSize)>,
+    /// True when rendering a `slideLayout` (not a slide): layout placeholders
+    /// emit `<p:ph type=…>` + their `lstStyle`/prompt so slide placeholders
+    /// inherit them; slide placeholders stay plain shapes (`txBox="1"`).
+    pub in_layout: bool,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -40,6 +44,7 @@ impl<'a> RenderCtx<'a> {
             shape_id: 1,
             media: Vec::new(),
             image_sizes: Vec::new(),
+            in_layout: false,
         }
     }
 
@@ -604,6 +609,81 @@ fn emit_bullet(xml: &mut Xml, style: &EffTextStyle) {
     }
 }
 
+/// Emit `<a:lstStyle>` for a placeholder. Plain text boxes get an empty
+/// `<a:lstStyle/>`; placeholders get a `<a:lvl1pPr>` rebuilt from the
+/// effective style (algn/lnSpc/spcBef/defRPr) so slide placeholders inherit
+/// the layout/master text style (font/size/colour/bold/align/spacing) —
+/// e.g. an empty slide title shows the layout's prompt in blue/bold 24pt.
+fn emit_lst_style(xml: &mut Xml, style: &EffTextStyle, is_placeholder: bool) {
+    if !is_placeholder {
+        xml.leaf("a:lstStyle", &[]);
+        return;
+    }
+    let algn = style.align.map(|a| match a.horizontal {
+        HorizontalAlign::Left => "l",
+        HorizontalAlign::Center => "ctr",
+        HorizontalAlign::Right => "r",
+        HorizontalAlign::Justify => "just",
+        HorizontalAlign::Distributed => "dist",
+    });
+    let sz = style.font_size.map(|s| ((s * 100.0).round() as u64).to_string());
+    let mut rpr_attrs: Vec<(&str, &str)> = Vec::new();
+    if let Some(ref s) = sz {
+        rpr_attrs.push(("sz", s));
+    }
+    if style.bold == Some(true) {
+        rpr_attrs.push(("b", "1"));
+    }
+    if style.italic == Some(true) {
+        rpr_attrs.push(("i", "1"));
+    }
+    let has_rpr = !rpr_attrs.is_empty() || style.color.is_some() || style.font_family.is_some();
+    let has_anything = algn.is_some()
+        || style.line_height.is_some()
+        || has_rpr;
+    if !has_anything {
+        // No style info → empty lstStyle so the placeholder inherits the
+        // layout/master (don't emit an empty `<a:lvl1pPr>` that overrides).
+        xml.leaf("a:lstStyle", &[]);
+        return;
+    }
+    let mut lvl_attrs: Vec<(&str, &str)> = Vec::new();
+    if let Some(a) = algn {
+        lvl_attrs.push(("algn", a));
+    }
+    xml.start("a:lstStyle", &[]);
+    xml.start("a:lvl1pPr", &lvl_attrs);
+    if let Some(lh) = style.line_height {
+        let pct = ((lh * 100000.0).round() as u64).to_string();
+        xml.start("a:lnSpc", &[]);
+        xml.leaf("a:spcPct", &[("val", &pct)]);
+        xml.end("a:lnSpc");
+    }
+    if has_rpr {
+        xml.start("a:defRPr", &rpr_attrs);
+        if let Some(c) = &style.color {
+            xml.start("a:solidFill", &[]);
+            xml.leaf("a:srgbClr", &[("val", c.0.trim_start_matches('#'))]);
+            xml.end("a:solidFill");
+        }
+        if let Some(f) = &style.font_family {
+            match f {
+                FontFamily::Single(name) => {
+                    xml.leaf("a:latin", &[("typeface", name)]);
+                    xml.leaf("a:ea", &[("typeface", name)]);
+                }
+                FontFamily::Bilingual { latin, ea } => {
+                    xml.leaf("a:latin", &[("typeface", latin)]);
+                    xml.leaf("a:ea", &[("typeface", ea)]);
+                }
+            }
+        }
+        xml.end("a:defRPr");
+    }
+    xml.end("a:lvl1pPr");
+    xml.end("a:lstStyle");
+}
+
 fn render_text(
     xml: &mut Xml,
     ctx: &mut RenderCtx<'_>,
@@ -674,7 +754,7 @@ fn render_text(
     if is_empty_placeholder {
         xml.start("p:txBody", &[]);
         xml.leaf("a:bodyPr", &[("anchor", anchor), ("wrap", "square")]);
-        xml.leaf("a:lstStyle", &[]);
+        emit_lst_style(xml, &style, true);
         xml.leaf("a:p", &[]);
         xml.end("p:txBody");
         xml.end("p:sp");
@@ -684,7 +764,7 @@ fn render_text(
     // Rich text (`<p>`/`<span>`/`<strong>` …): parse paragraph + run styles.
     if text.content.text.contains('<') {
         xml.start("p:txBody", &[]);
-        render_rich_body(xml, ctx.theme, &style, &text.content.text, anchor)?;
+        render_rich_body(xml, ctx.theme, &style, &text.content.text, anchor, text.placeholder.is_some())?;
         xml.end("p:txBody");
         xml.end("p:sp");
         return Ok(());
@@ -725,7 +805,7 @@ fn render_text(
         None => {}
     }
     xml.end("a:bodyPr");
-    xml.leaf("a:lstStyle", &[]);
+    emit_lst_style(xml, &style, text.placeholder.is_some());
 
     // Plain text: every line becomes one paragraph (the `<p>` equivalence).
     let sz = (style.font_size.unwrap_or(18.0) * 100.0)
@@ -1044,6 +1124,7 @@ fn render_rich_body(
     style: &EffTextStyle,
     text: &str,
     anchor: &str,
+    is_placeholder: bool,
 ) -> Result<()> {
     // Box-level defaults (shared with the plain-text path).
     let wrap = if style.wrap == Some(false) {
@@ -1080,7 +1161,7 @@ fn render_rich_body(
         None => {}
     }
     xml.end("a:bodyPr");
-    xml.leaf("a:lstStyle", &[]);
+    emit_lst_style(xml, style, is_placeholder);
 
     for para in parse_rich(text) {
         xml.start("a:p", &[]);

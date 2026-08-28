@@ -659,7 +659,9 @@ fn layout_xml(
     }
     x.start("p:spTree", &[]);
     group_prolog(&mut x);
+    ctx.in_layout = true;
     render::render_sp_tree(&mut x, ctx, &def.elements, def.groups.as_ref(), 0)?;
+    ctx.in_layout = false;
     x.end("p:spTree");
     x.end("p:cSld");
     x.start("p:clrMapOvr", &[]);
