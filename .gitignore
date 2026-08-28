@@ -9,3 +9,5 @@
 *.swp
 .idea/
 .vscode/
+# Local deck working dirs from pptx<->pptd round-trip sessions
+ai-agent-deck/

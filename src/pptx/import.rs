@@ -2030,7 +2030,8 @@ fn border_from_el(sp_el: &XmlEl, slots: &SlotColors) -> Option<Border> {
                 .map(|v| match v {
                     "dash" | "sysDash" | "dashDot" | "lgDash" | "lgDashDot" | "lgDashDotDot"
                     | "sysDashDot" => LineStyle::Dash,
-                    "dot" | "sysDot" => LineStyle::Dot,
+                    "dot" => LineStyle::Dot,
+                    "sysDot" => LineStyle::SysDot,
                     _ => LineStyle::Solid,
                 });
             // A gradient outline is captured verbatim; a solid colour

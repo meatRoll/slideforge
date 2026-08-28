@@ -136,6 +136,10 @@ pub enum LineStyle {
     Solid,
     Dash,
     Dot,
+    /// OOXML `sysDot`: the PowerPoint "system dot" preset. Visually much
+    /// finer than `dot` (dot diameter == line width, spacing == line width),
+    /// so round-tripping it through `dot` visibly coarsens dotted rules.
+    SysDot,
 }
 
 /// A border around a shape, cell, chart frame, ...

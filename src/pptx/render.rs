@@ -331,6 +331,7 @@ fn border_xml(xml: &mut Xml, theme: Option<&Theme>, border: &Border) -> Result<(
         LineStyle::Solid => "solid",
         LineStyle::Dash => "dash",
         LineStyle::Dot => "dot",
+        LineStyle::SysDot => "sysDot",
     });
     if let Some(width) = &width_attr {
         xml.start("a:ln", &[("w", width)]);
@@ -1285,10 +1286,14 @@ fn render_rich_body(
             .map(|px| ((px * 100.0).round() as u64).to_string());
 
         ppr_open(xml, algn, style);
-        // Empty (spacer) paragraphs carry no line spacing — matching Office,
-        // whose empty `<a:p>` renders a much shorter blank line than an
-        // explicit lnSpc at the box font would.
-        if !para.runs.is_empty() {
+        // Empty (spacer) paragraphs without an explicit style carry no line
+        // spacing — matching Office, whose empty `<a:p>` renders a much
+        // shorter blank line than an explicit lnSpc at the box font would.
+        // A spacer that DOES carry an explicit line-height keeps it, so
+        // round-tripped template spacing (lnSpc 10%–60% rules between
+        // sections) doesn't inflate to full line height and push content
+        // out of its box.
+        if !para.runs.is_empty() || para.line_height.is_some() || para.line_height_px.is_some() {
             if let Some(pct) = line_height_pct {
                 xml.start("a:lnSpc", &[]);
                 xml.leaf("a:spcPct", &[("val", &pct)]);
@@ -1571,8 +1576,16 @@ fn render_line(xml: &mut Xml, ctx: &mut RenderCtx<'_>, line: &Line) -> Result<()
         line.common.flip,
     );
 
-    let path_w = emu(line.view_box.0).to_string();
-    let path_h = emu(line.view_box.1).to_string();
+    // viewBox and points share one coordinate space (px in hand-written
+    // PPTD, raw EMU in converted decks). Emit them verbatim — the path
+    // space is relative, so any consistent unit works, and halving the
+    // magnitude keeps values inside OOXML's signed-int32 point range.
+    // (Scaling both by 12700 preserved the ratio but produced e.g.
+    // 91249817500, which PowerPoint clamps/overflows — a straight connector
+    // then shoots far past the slide edge — while LibreOffice normalized
+    // it away, hiding the bug in local previews.)
+    let path_w = (line.view_box.0.round() as i64).to_string();
+    let path_h = (line.view_box.1.round() as i64).to_string();
     xml.start("a:custGeom", &[]);
     xml.leaf("a:avLst", &[]);
     xml.leaf("a:gdLst", &[]);
@@ -1586,8 +1599,8 @@ fn render_line(xml: &mut Xml, ctx: &mut RenderCtx<'_>, line: &Line) -> Result<()
     // Every point is shrunk to the viewBox; the element-level transform
     // (bounds) then scales it to the target geometry.
     let (first, rest) = points.split_first().expect("len >= 2 checked above");
-    let first_x = emu(first.0).to_string();
-    let first_y = emu(first.1).to_string();
+    let first_x = (first.0.round() as i64).to_string();
+    let first_y = (first.1.round() as i64).to_string();
     xml.start("a:moveTo", &[]);
     xml.leaf("a:pt", &[("x", &first_x), ("y", &first_y)]);
     xml.end("a:moveTo");
@@ -1608,8 +1621,8 @@ fn render_line(xml: &mut Xml, ctx: &mut RenderCtx<'_>, line: &Line) -> Result<()
         }
     } else {
         for (x, y) in rest {
-            let x = emu(*x).to_string();
-            let y = emu(*y).to_string();
+            let x = (x.round() as i64).to_string();
+            let y = (y.round() as i64).to_string();
             xml.start("a:lnTo", &[]);
             xml.leaf("a:pt", &[("x", &x), ("y", &y)]);
             xml.end("a:lnTo");
