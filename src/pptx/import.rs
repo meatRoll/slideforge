@@ -3092,13 +3092,24 @@ fn text_content(
     }
 
     // Uniform path: one run per paragraph, identical style → plain text.
-    let uniform = out_lines.iter().all(|l| {
-        l.runs.len() == 1
-            && l.align == align
-            && l.line_height == line_height
-            && l.margin_top_px.is_none()
-            && l.runs[0].0 == run_style
-    });
+    // A box with empty spacer paragraphs can't take it: the plain-text form
+    // joins paragraphs with `\n` and build's plain-text splitter skips
+    // blank lines (a YAML block-scalar trailing newline must not become a
+    // spurious empty paragraph). An empty `<a:p>` encoded as a blank line
+    // would therefore vanish on rebuild. Force the rich `<p>` form instead,
+    // where each empty paragraph becomes an explicit `<p></p>` that build
+    // preserves as an empty `<a:p>` (a visible blank line).
+    let has_empty_para = out_lines
+        .iter()
+        .any(|l| l.runs.iter().all(|(_, t)| t.is_empty()));
+    let uniform = !has_empty_para
+        && out_lines.iter().all(|l| {
+            l.runs.len() == 1
+                && l.align == align
+                && l.line_height == line_height
+                && l.margin_top_px.is_none()
+                && l.runs[0].0 == run_style
+        });
 
     let text = if uniform {
         out_lines
