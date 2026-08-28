@@ -212,18 +212,20 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 
 ## 8. 作者细节（按需加载，别全塞进上下文）
 
-写作时再读这些（progressive disclosure）：
+本技能**自带 PPTD 文档副本**（都在 `skill/slideforge-ppt/references/`，与仓库 `docs/` 同步；仓库根相对，可直接 `read`）。写作时再读（progressive disclosure）：
 
-- **完整 PPTD 写作规范（字段/样式优先级/富文本/陷阱）**：`docs/pptd-writing-guide.md`
+- **完整 PPTD 写作指南（字段/样式优先级/富文本/陷阱）**：`skill/slideforge-ppt/references/pptd-writing-guide.md`
   ← 最重要，写 .page 前必读其 §2 支持矩阵 + §7 元素速查 + §11 do/don't。
 - **三模式分步剧本（含 B1/B2 子模式）**：`skill/slideforge-ppt/references/modes.md`
   ← 进入某模式时加载对应小节；B 模式按 B1/B2 分支。
-- **round-trip 扩展字段**（convert 写出、build 尊重、手写可忽略）：`docs/pptd-roundtrip-extension.md`
-- **layouts 扩展**（`Presentation.layouts`/`Page.layout`/`Text.placeholder`）：`docs/pptd-layout-extension.md`
-- **group 扩展**（`groupId`/`groupBounds`/`Page.groups`）：`docs/pptd-group-extension.md`
-- **可运行样例**：`tests/fixtures/demo/`、`tests/fixtures/buildable/`、`docs/samples/min/`
-- **PPTD 规范语义**（权威，有出入以此为准）：`docs/pptd-spec.md`
-- 形状库(177 个 shapeName)/字体库/设计系统：Moonshot `reference/`（若用户已集成）。
+- **layouts 扩展**（`Presentation.layouts`/`Page.layout`/`Text.placeholder`，本仓库对 Kimi PPTD 的扩展）：`skill/slideforge-ppt/references/pptd-layout-extension.md`
+- **group 扩展**（`groupId`/`groupBounds`/`Page.groups`，本仓库扩展）：`skill/slideforge-ppt/references/pptd-group-extension.md`
+- **round-trip 扩展字段**（`Text.fill`/`Text.border`、`bulletChar`/`listMargin`/`listIndent`、`marginLeft`/`marginRight`/`marginBottom`、`autofit`、`softEdge`、`Shadow.inner`/`scale` 等；保 OOXML 往返保真）：`skill/slideforge-ppt/references/pptd-roundtrip-extension.md`
+- **PPTD 规范语义**（权威，有出入以此为准）：`skill/slideforge-ppt/references/pptd-spec.md`
+- **可运行样例**：`docs/samples/min/`（仓库内；AI 的 CWD 即仓库根，可直接 `check`/`build` 验证）
+- 形状库(177 个 shapeName)/字体库：Moonshot `reference/`（若用户已集成；spec 内 `shapes.md`/`fonts.md` 为悬空链接，查 Moonshot reference 为主）。
+
+> **为何嵌入**：本仓库的 PPTD 是在 Kimi PPTD v2 之上做了扩展（layouts/group/round-trip），AI 写 PPTD 必须照**本仓库的扩展版**规范来写，所以把文档随技能一起带上，脱离 `docs/` 也能正确写作。`docs/` 改动后需重同步 `skill/slideforge-ppt/references/pptd-*.md`（见各文件顶部同步注释）。
 
 ---
 
