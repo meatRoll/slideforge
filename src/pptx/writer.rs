@@ -6,20 +6,29 @@
 //! Implemented:
 //! - OPC shell: `[Content_Types].xml`, root/presentation/slide `.rels`,
 //!   `docProps/core.xml`, `ppt/presentation.xml`;
-//! - synthesized minimal slide master + blank layout (structural compliance
-//!   only, see `docs/pptx-layout-synthesis.md`);
+//! - synthesized minimal slide master + blank layout (structural
+//!   compliance only, see `docs/pptx-layout-synthesis.md`), plus one real
+//!   `slideLayoutN.xml` per declared `Presentation.layouts` key (P3);
 //! - `theme1.xml` from `Presentation.theme` (clrScheme slot mapping is a
 //!   draft; see `src/pptx/theme.rs`);
 //! - slides for `text`, `shape`, `line`, `icon` (Font Awesome glyphs as
 //!   custom geometry, `pptd:icon` round-trip extension) and `image`
-//!   elements, page backgrounds, and a default fade transition;
+//!   elements, page/layout backgrounds (solid/gradient and image
+//!   `a:blipFill`), and a default fade transition;
+//! - rich text (`<p>`/`<span style>`/`<strong>`/`<em>`): per-paragraph
+//!   `text-align`/`line-height`/`margin-top`, per-run color/font-size/...
+//!   style overrides;
+//! - shape drop shadows (`a:effectLst > a:outerShdw` / `a:innerShdw`,
+//!   incl. the `scale` and `inner` SlideForge extensions);
 //! - media parts (`png`/`jpg`/`jpeg`) with `contain`/`cover` `a:srcRect`
 //!   cropping computed from sniffed image dimensions.
 //!
 //! Not yet: `table`, `chart` elements (build fails with an explicit
-//! [`Error::Unsupported`]); rich text tags (`<p>`/`<span>`/...) are
-//! plain-text only; `Fill::Image` backgrounds/fills, shape shadows, `notes`
-//! and `animations` are not emitted yet.
+//! [`Error::Unsupported`]); rich text tags beyond `p`/`span`/`strong`/`em`
+//! (`<u>`/`<s>`/`<sup>`/`<sub>`/`<a>`/`<ul>`/`<ol>`/`<li>`); image fills on
+//! shapes (`fill_xml` rejects `Fill::Image` — only backgrounds support
+//! `a:blipFill`); `notes` (notesSlide) and `animations` (`p:timing`) are
+//! not emitted yet.
 //!
 //! # Coordinate conversion
 //!
@@ -662,6 +671,15 @@ fn layout_xml(
     ctx.in_layout = true;
     render::render_sp_tree(&mut x, ctx, &def.elements, def.groups.as_ref(), 0)?;
     ctx.in_layout = false;
+    // One `<p:sp>` per declared placeholder: `<p:ph type>` + xfrm +
+    // lstStyle/defRPr so slide placeholders inherit geometry + run-style
+    // (the layout→slide placeholder chain; layout extension §8). Sorted by
+    // type for deterministic output (HashMap iteration is unordered).
+    let mut phs: Vec<_> = def.placeholders.iter().collect();
+    phs.sort_by_key(|(k, _)| *k);
+    for (type_name, ph_def) in phs {
+        render::render_layout_placeholder(&mut x, ctx, theme, type_name, ph_def)?;
+    }
     x.end("p:spTree");
     x.end("p:cSld");
     x.start("p:clrMapOvr", &[]);

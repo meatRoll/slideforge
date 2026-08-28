@@ -76,6 +76,8 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
 - `elementType: shape: custom`（SVG path + viewBox ↔ custGeom）
 - 富文本 `content.text`：`<p style="...">` / `<span style="...">` / `<strong>` / `<em>` → 逐段落/逐 run 样式；段落级 `text-align`、`line-height`（倍率或 px）、`margin-top`
 - 文本框级 `wrap` / `align` / `autofit`（FitShape/FitText）/ 四边 margin
+- shape 阴影（`a:outerShdw` / `a:innerShdw`，含 `scale` 与 `inner` 扩展）
+- 页/版式背景的图片填充（`Fill::Image` → `a:blipFill`）；形状级图片填充仍报 not-supported
 - table / chart 仍报明确的 not-supported 错误（见路线图）
 
 ## 路线图
@@ -90,7 +92,9 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
     - [x] text / shape / line / icon / image 渲染 + 页背景 + fade 过渡
     - [x] custom 几何（custGeom ↔ SVG path）
     - [x] 富文本标签 → run 拆分（`<p>`/`<span>`/`<strong>`/`<em>`）
-    - [ ] table / chart 元素、notes / animations / shadow / Fill::Image
+    - [x] shape 阴影（`a:outerShdw`/`a:innerShdw`）
+    - [x] 页/版式背景图片填充（`a:blipFill`）
+    - [ ] table / chart 元素、notes / animations
 - [x] OPC 打包（`zip` crate），产出可编辑 .pptx
 - [x] pptx → pptd 反向解析（`slideforge convert`，含 40 页模板往返像素级回归）
 - [ ] 图表 → 原生 OOXML chart parts 、动画 → `p:timing`、备注 → notesSlide

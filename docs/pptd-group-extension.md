@@ -49,6 +49,7 @@ interface GroupDef {
   xfrm: GroupXfrm;     // the group's raw <a:xfrm> (off/ext/chOff/chExt), verbatim
   name?: string;       // the original p:cNvPr name (e.g. "组合 22")
   parent?: string;     // parent groupId for nested groups (null = top-level)
+  fill?: Fill;         // SlideForge ext; group's own <p:grpSpPr> fill so <a:grpFill> children inherit it (see pptd-roundtrip-extension.md §6)
 }
 interface GroupXfrm {
   off:     [x, y];     // slide-space offset (px)

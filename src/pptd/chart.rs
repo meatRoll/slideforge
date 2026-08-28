@@ -57,6 +57,9 @@ pub struct Chart {
     /// `boolean | LegendConfig` (kept raw for now).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legend: Option<YamlValue>,
+    /// Global default, overridden by `series[i].dataLabels` (spec §Chart).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_labels: Option<YamlValue>,
     /// `AxisConfig | AxisConfig[]` (kept raw for now).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_axis: Option<YamlValue>,
@@ -65,6 +68,16 @@ pub struct Chart {
     /// `SpokeAxisConfig`, radar only (kept raw for now).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spoke_axis: Option<YamlValue>,
+    /// `barWidth` / `barGap` / `categoryGap` — bar layout parameters
+    /// (spec §Chart top-level, conditionally effective for bar / waterfall).
+    /// Retained as raw YAML so a deck round-trips; the writer does not yet
+    /// render charts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_width: Option<YamlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_gap: Option<YamlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_gap: Option<YamlValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<super::shared::FontFamily>,
     /// Chart frame (the rectangular container of the whole chart element).

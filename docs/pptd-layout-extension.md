@@ -73,6 +73,7 @@ interface LayoutDef {
   background?:   Fill;                            // page background when the page doesn't set one
   elements?:     Element[];                       // decorative elements, painted UNDER page.elements
   placeholders?: { [type: string]: PlaceholderDef };  // geometry + style for slide placeholders
+  groups?:       { [key: string]: GroupDef };     // SlideForge ext; reconstructed <p:grpSp> metadata for decorative elements (see pptd-roundtrip-extension.md)
 }
 ```
 
@@ -80,6 +81,8 @@ interface LayoutDef {
   (no new element kinds).
 - `placeholders` is keyed by OOXML placeholder type (`title`, `body`,
   `subTitle`, `dt`, …) — see §5.
+- `groups` is a SlideForge round-trip field (same shape as `Page.groups`);
+  see [`pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md) §5.
 
 ## 5. `PlaceholderDef`
 

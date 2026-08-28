@@ -3116,7 +3116,7 @@ fn text_content(
             // Force an explicit value so the renderer never falls back to the
             // 120% default.
             if let Some(lh) = l.line_height {
-                style_parts.push(format!("line-height:{}", lh));
+                style_parts.push(format!("line-height:{lh}"));
             }
             if let Some(mt) = l.margin_top_px {
                 style_parts.push(format!("margin-top:{mt}px"));

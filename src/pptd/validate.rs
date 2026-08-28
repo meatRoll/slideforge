@@ -47,11 +47,44 @@ pub fn validate_project(project: &Project) -> Vec<Diagnostic> {
         });
     }
 
+    check_path_containment(project, &mut out);
+
     for (idx, page) in project.pages.iter().enumerate() {
         validate_page(project, idx, page, &mut out);
     }
 
     out
+}
+
+/// Verify every referenced page path stays inside the project root (the
+/// canonical PPTD "fully self-contained" rule, spec §Multi-File Structure).
+/// A page path that escapes via `..` is reported as a `Diagnostic` rather
+/// than failing the load. Both sides are canonicalized so symlinks and
+/// on-disk case are handled consistently.
+fn check_path_containment(project: &Project, out: &mut Vec<Diagnostic>) {
+    let Ok(root) = project.root_dir.canonicalize() else {
+        return; // best-effort; an unreadable root surfaces elsewhere.
+    };
+    for (idx, path) in project.page_paths.iter().enumerate() {
+        let Ok(resolved) = path.canonicalize() else {
+            continue; // already-read files resolve; skip if not.
+        };
+        if !resolved.starts_with(&root) {
+            let rel = project
+                .presentation
+                .pages
+                .get(idx)
+                .map(|s| s.as_str())
+                .unwrap_or("?");
+            diag(
+                out,
+                idx,
+                format!(
+                    "page path `{rel}` escapes the project directory (PPTD projects must be self-contained)"
+                ),
+            );
+        }
+    }
 }
 
 fn validate_page(project: &Project, page_idx: usize, page: &Page, out: &mut Vec<Diagnostic>) {

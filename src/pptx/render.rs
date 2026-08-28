@@ -13,8 +13,8 @@ use crate::pptd::shared::{
     ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
 use crate::pptd::{
-    Element, Icon, Image, Line, LineCurve, Shape, Text, TextAutofit, TextContent, TextDirection,
-    Theme,
+    Element, Icon, Image, Line, LineCurve, PlaceholderDef, Shape, Text, TextAutofit, TextContent,
+    TextDirection, Theme,
 };
 use crate::{Error, Result};
 
@@ -504,6 +504,91 @@ pub fn bg_fill_xml(
     }
 }
 
+/// Emit one `<p:sp>` placeholder definition for a `slideLayout`, from a
+/// [`PlaceholderDef`]. Carries `<p:ph type>` + `xfrm` + an `<a:lstStyle>`
+/// rebuilt from the placeholder's resolved run-style, so slide placeholders
+/// that omit geometry/run-style inherit it (the full OOXML layout→slide
+/// placeholder chain — `pptd-layout-extension.md` §8). Mirrors the
+/// slide-side empty placeholder shape; an empty `<a:p/>` lets the consumer
+/// render the "Click to edit …" prompt.
+pub fn render_layout_placeholder(
+    xml: &mut Xml,
+    ctx: &mut RenderCtx<'_>,
+    theme: Option<&Theme>,
+    type_name: &str,
+    def: &PlaceholderDef,
+) -> Result<()> {
+    let id = ctx.next_id().to_string();
+    xml.start("p:sp", &[]);
+    xml.start("p:nvSpPr", &[]);
+    xml.start("p:cNvPr", &[("id", &id), ("name", type_name)]);
+    xml.end("p:cNvPr");
+    xml.leaf("p:cNvSpPr", &[]);
+    xml.start("p:nvPr", &[]);
+    xml.leaf("p:ph", &[("type", type_name), ("idx", "1")]);
+    xml.end("p:nvPr");
+    xml.end("p:nvSpPr");
+
+    xml.start("p:spPr", &[]);
+    xfrm(xml, def.bounds, None, None);
+    xml.start("a:prstGeom", &[("prst", "rect")]);
+    xml.leaf("a:avLst", &[]);
+    xml.end("a:prstGeom");
+    xml.leaf("a:noFill", &[]);
+    xml.end("p:spPr");
+
+    // Resolve the placeholder's run-style: the `style` ref (`$key` →
+    // theme.textStyles) as the base, overridden by the explicit fields.
+    let base = def
+        .style
+        .as_deref()
+        .and_then(|s| theme.and_then(|t| t.text_styles.get(s.trim_start_matches('$'))));
+    // Resolve any `$key` theme color reference to a hex literal so the
+    // emitted `<a:srgbClr>` is valid OOXML (a raw `$primary` would be
+    // rejected). Falls back to the raw value if the theme can't resolve it.
+    let raw_color = def
+        .color
+        .clone()
+        .or_else(|| base.and_then(|b| b.color.clone()));
+    let color = raw_color
+        .as_ref()
+        .and_then(|c| resolve_color(theme, c).ok().map(|rc| Color(rc.rgb)))
+        .or(raw_color);
+    let style = EffTextStyle {
+        color,
+        font_size: def.font_size.or_else(|| base.and_then(|b| b.font_size)),
+        font_family: def
+            .font_family
+            .clone()
+            .or_else(|| base.and_then(|b| b.font_family.clone())),
+        bold: def.bold.or_else(|| base.and_then(|b| b.bold)),
+        italic: def.italic.or_else(|| base.and_then(|b| b.italic)),
+        line_height: base.and_then(|b| b.line_height),
+        line_height_px: None,
+        align: def.align,
+        wrap: None,
+        direction: None,
+        margin_top: None,
+        margin_left: None,
+        margin_right: None,
+        margin_bottom: None,
+        autofit: None,
+        body_pr_extras: None,
+        bullet_char: None,
+        bullet_font: None,
+        list_margin: None,
+        list_indent: None,
+    };
+
+    xml.start("p:txBody", &[]);
+    xml.leaf("a:bodyPr", &[]);
+    emit_lst_style(xml, &style, true);
+    xml.leaf("a:p", &[]);
+    xml.end("p:txBody");
+    xml.end("p:sp");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
@@ -626,7 +711,9 @@ fn emit_lst_style(xml: &mut Xml, style: &EffTextStyle, is_placeholder: bool) {
         HorizontalAlign::Justify => "just",
         HorizontalAlign::Distributed => "dist",
     });
-    let sz = style.font_size.map(|s| ((s * 100.0).round() as u64).to_string());
+    let sz = style
+        .font_size
+        .map(|s| ((s * 100.0).round() as u64).to_string());
     let mut rpr_attrs: Vec<(&str, &str)> = Vec::new();
     if let Some(ref s) = sz {
         rpr_attrs.push(("sz", s));
@@ -638,9 +725,7 @@ fn emit_lst_style(xml: &mut Xml, style: &EffTextStyle, is_placeholder: bool) {
         rpr_attrs.push(("i", "1"));
     }
     let has_rpr = !rpr_attrs.is_empty() || style.color.is_some() || style.font_family.is_some();
-    let has_anything = algn.is_some()
-        || style.line_height.is_some()
-        || has_rpr;
+    let has_anything = algn.is_some() || style.line_height.is_some() || has_rpr;
     if !has_anything {
         // No style info → empty lstStyle so the placeholder inherits the
         // layout/master (don't emit an empty `<a:lvl1pPr>` that overrides).
@@ -768,7 +853,14 @@ fn render_text(
     // Rich text (`<p>`/`<span>`/`<strong>` …): parse paragraph + run styles.
     if text.content.text.contains('<') {
         xml.start("p:txBody", &[]);
-        render_rich_body(xml, ctx.theme, &style, &text.content.text, anchor, text.placeholder.is_some())?;
+        render_rich_body(
+            xml,
+            ctx.theme,
+            &style,
+            &text.content.text,
+            anchor,
+            text.placeholder.is_some(),
+        )?;
         xml.end("p:txBody");
         xml.end("p:sp");
         return Ok(());

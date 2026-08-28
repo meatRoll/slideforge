@@ -10,7 +10,9 @@
 > （`Presentation.layouts` / `Page.layout` / `Text.placeholder`，可选、向后兼容）。
 > **SlideForge 的 group 扩展**见 [`docs/pptd-group-extension.md`](./pptd-group-extension.md)
 > （`ElementCommon.groupId`/`groupBounds` + `Page.groups`，扁平形式不变、writer 重建 `<p:grpSp>`，保留 WPS 组合选择框）。
-> 两份文档是 AI 编辑 PPTD 时的权威参考。Moonshot 的参考资料在「形状库 / 字体库 /
+> **SlideForge 的 round-trip 扩展字段**见 [`docs/pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md)
+> （`Text.fill/border`、`TextContent` 的 autofit/margin/bullet/bodyPrExtras、`Border.gradient`、`Shadow.scale+inner`、`GradientFill.scaled`、`Image.softEdge` 等，convert 写出、build 尊重、手写可忽略）。
+> 这些文档是 AI 编辑 PPTD 时的权威参考。Moonshot 的参考资料在「形状库 / 字体库 /
 > 设计系统 / 场景分类」上更完整，写作时互补。
 
 ---
@@ -86,15 +88,15 @@ cargo run -- convert 某模板.pptx ./converted
 | 主题 `tableStyles` | ✅ | ❌（依赖 table） | — |
 | 富文本 `<p>/<span>/<strong>/<em>` | ✅ | ✅ | ✅ |
 | 页背景 `solid` / `gradient` | ✅ | ✅ | ✅ |
-| 页背景 `Fill::Image`（图片填充） | ✅ | ❌ 路线图 | — |
+| 页背景 `Fill::Image`（图片填充） | ✅ | ✅（`a:blipFill`） | ✅ |
 | `animations` 动画 | ✅ | ❌ 路线图（`p:timing`） | — |
 | `notes` 演讲者备注 | ✅ | ❌ 路线图 | — |
-| `shadow` 阴影 | ✅ | ❌ 静默丢弃 | — |
+| `shadow` 阴影 | ✅ | ✅（shape `a:outerShdw`/`a:innerShdw`；`image.shadow` 仍静默丢弃） | — |
 | 渐变填充 `gradient` | ✅ | ✅ | ✅ |
 
 > **给 AI 的硬规则**：
 > 1. 目标是「能 `build` 出 PPTX」时，**只使用** `text` / `shape` / `line` /
->    `image` / `icon` + solid/gradient 背景 + 主题 colors/textStyles + 富文本。
+>    `image` / `icon` + solid/gradient/image 背景 + 主题 colors/textStyles + 富文本。
 >    **不要** 在页面里放 `table` 或 `chart` 元素，否则 `build` 会中止。
 > 2. 若用户需要表格/图表，**优先用 `shape` + `text` 手工拼装**（网格用 `shape`
 >    画单元格、`text` 写内容、`line` 画分隔线），效果可控且能 build。
@@ -127,8 +129,8 @@ my_deck/
    - `.pptd` 里的 `pages` 列表：`pages/1_cover.page`
    - `.page` 里的图片：`media/logo.png`
 3. **媒体支持 URL**：`Image.src` 与图片填充 `Fill.type: image` 的 `src` 可以是
-   `https://...`（仅 jpg/jpeg/png/gif）。但注意 `build` 当前未实现 `Fill::Image`；
-   `Image` 元素的本地路径与 URL 均可 build。
+   `https://...`（仅 jpg/jpeg/png/gif）。`build` 已支持页/版式背景的 `Fill::Image`
+   （`a:blipFill`），形状级图片填充仍不支持；`Image` 元素的本地路径与 URL 均可 build。
 4. **主入口必需**：不能单独把一个 `.page` 丢给 `check`/`build`，必须经由 `.pptd` 主入口
    加载（页顺序由 `.pptd` 的 `pages` 列表决定）。
 
@@ -282,8 +284,10 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 `TextContent` 全字段：`text`（必填，富文本）/ `style` / `color` / `fontSize` /
 `fontFamily` / `bold` / `italic` / `backgroundColor` / `lineHeight` / `lineHeightPx` /
 `letterSpacing` / `marginTop` / `textDirection`(horizontal|vertical) / `wrap`(默认true) /
-`align` / `autofit`(FitShape|FitText) / `gradient` / `shadow`。
+`align` / `autofit`(fit_shape/fit_text/fixed) / `gradient` / `shadow`。
 
+> 上述含 SlideForge 扩展字段（`autofit`/四边 margin 等）；完整 round-trip 扩展字段见
+> [`pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md)。
 > 单行文本建议显式 `wrap: false`；多行用块标量 `|`（见 §8）。
 
 ### 7.2 shape 形状
@@ -350,7 +354,7 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 ```
 
 渲染顺序固定：`crop`（调源矩形）→ `fit`（适配 bounds）→ `cropShape`（形状裁剪）。
-注意 `shadow` 当前 `build` 会静默丢弃。
+注意 `image.shadow` 当前 `build` 仍静默丢弃（shape 的 shadow 已支持）。
 
 ### 7.5 icon 图标（Font Awesome 7.x free）
 
@@ -635,6 +639,7 @@ cargo run -- convert 某模板.pptx ./converted
 - 本仓库
   - [`README.md`](../README.md)：架构、命名约定、能力清单与路线图
   - [`docs/pptx-layout-synthesis.md`](./pptx-layout-synthesis.md)：master/layout 合成骨架策略
+  - [`docs/pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md)：SlideForge round-trip 扩展字段（Text/TextContent/Border/Shadow/Image 等的额外字段）
   - `tests/fixtures/demo/`、`tests/fixtures/buildable/`：可运行样例
   - 源码：`src/pptd/`（AST+parser+validate）、`src/pptx/`（OPC+render+writer+import）
 - Moonshot PPTD 规范与配套（语义权威，写作时查）
