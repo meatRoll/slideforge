@@ -1,7 +1,7 @@
 # 三模式分步剧本
 
 > 按用户输入确定模式（见 SKILL.md §2）后，读对应小节。命令里 `$SF` 指
-> `skill/slideforge-ppt/bin/slideforge` 多平台派发器（见 SKILL.md §1 bootstrap；后文 `$SF` 指代它）。所有路径相对项目根（cwd）。
+> `bin/slideforge` 多平台派发器（技能目录相对，见 SKILL.md §1 bootstrap；后文 `$SF` 指代它）。**技能内文件**（references/）相对技能目录；**用户文件**（.pptx、work_dir、mydeck/）相对当前 cwd。
 
 ---
 
@@ -24,7 +24,7 @@
    - 样板见 `docs/samples/min/deck.pptd` 与 `tests/fixtures/demo/`。
 
 4. **并行写 `mydeck/pages/*.page`**：每页一文件。一次写多页减少往返。
-   - 写前必读 `skill/slideforge-ppt/references/pptd/pptd-writing-guide.md` 的 §7 元素速查 + §11 do/don't。
+   - 写前必读 `references/pptd/pptd-writing-guide.md` 的 §7 元素速查 + §11 do/don't。
    - 含 `style="..."` 的富文本一律用块标量 `|`，避免 YAML 误解析。
    - `elementId` 页内唯一；`bounds` 之和不超过画布。
 

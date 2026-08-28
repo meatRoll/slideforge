@@ -52,7 +52,7 @@ slideforge-ppt/
 | `bin/slideforge-aarch64-apple-darwin` | macOS Apple Silicon 预编译（2.6M） |
 | `bin/slideforge-x86_64-apple-darwin` | macOS Intel 预编译（2.8M；arm64 机靠 Rosetta 也能跑） |
 
-SKILL.md §1 令 `SF=skill/slideforge-ppt/bin/slideforge`，后文命令以 `"$SF"` 调用，AI 无需关心平台。
+SKILL.md §1 令 `SF=<技能目录>/bin/slideforge`（技能目录相对，pi 按本技能 `<location>` 解析成绝对路径），后文命令以 `"$SF"` 调用，AI 无需关心平台。
 
 **加新平台**：在仓库交叉编译后，把产物命名为 `slideforge-<triple>`（Windows 加 `.exe`）放进 `bin/`，派发器自动识别。当前已知的 triple 名：
 
@@ -85,14 +85,15 @@ design_system 有**两套并行**组织（上游源遗留，本技能原样保�
 
 ## 路径约定
 
-- **仓库根相对**：SKILL.md / modes.md / slides_categories.md 里引用 references 文件一律用 `skill/slideforge-ppt/references/...` 全路径，因为 AI 的 `read` 从 CWD（=仓库根）解析。**不要**改成技能目录相对（`references/...`），那会从 AI 的 CWD 解析失败。
+- **技能目录相对**：SKILL.md / modes.md 里引用技能内文件（references/、bin/）一律用技能目录相对路径（如 `references/pptd/pptd-spec.md`、`bin/slideforge`）。pi 在系统提示的 `<location>` 给出本 SKILL.md 绝对路径，AI 据此把相对路径解析成绝对路径再用——所以技能拷到哪都能跑，不依赖 CWD。
+- **用户文件相对 cwd**：用户给的 .pptx、work_dir、mydeck/ 等是用户数据，相对当前 cwd（AI 在哪工作就在哪建/读），与技能目录无关。
 - **pptd/ 内互链**用 `./`（同目录），因这 7 份是封闭互链集，整集同目录移动即保链接。
-- **外链回仓库根**从 `references/pptd/` 起 4 层：`../../../../README.md`、`../../../../docs/pptx-layout-synthesis.md`。
+- **外链**（writing-guide 里的 `[SlideForge](../../../../README.md)` 等）指向 slideforge 仓库；技能独立拷贝到 `~/.pi/agent/skills/` 时这些是死链（不影响 AI 读文件，仅人读渲染失效）。
 
 ## 与仓库 `docs/` 的同步
 
 `references/pptd/` 下的 `pptd-*.md` 与仓库 `docs/pptd-*.md` **逐份对应**（顶部有同步注释标明来源）。`docs/` 改动后需重同步 references/ 副本，否则技能里的规范会落后于实现。`shapes.md` / `fonts.md` / `design/` 下文件源自上游（见各头部注释/目录 README），与仓库 `docs/` 无对应关系，不参与同步。
 
-## 技能发现（本地，不入库）
+## 技能发现（全局安装）
 
-`.pi/settings.json`（被 `.gitignore` 忽略，本地态）登记 `{"skills":["skill"]}` 即可被 pi 自动发现；或在信任项目后 `pi --skill skill/slideforge-ppt`。新克隆仓库需自行创建 `.pi/settings.json`，技能不会自动发现。
+本技能已拷贝到 `~/.pi/agent/skills/slideforge-ppt/`，pi 全局自动发现——任意 cwd 下 `/skill:slideforge-ppt` 可用。源在仓库 `skill/slideforge-ppt/`，改完需重新拷贝覆盖全局副本（`cp -R skill/slideforge-ppt/ ~/.pi/agent/skills/slideforge-ppt/`）。
