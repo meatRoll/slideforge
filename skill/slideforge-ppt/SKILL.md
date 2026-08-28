@@ -66,7 +66,7 @@ B 内部还分两种，**区别只在"谁动 PPTX"**：
 
 | 子模式 | 谁改 PPTX | PPTD 的角色 | 协议 |
 |---|---|---|---|
-| **B1 纯AI改** | 没人手改；PPTX 只是 build 产物 | AI 唯一编辑层 | 改PPTD→check→build→交付 |
+| **B1 纯AI改** | 没人手改；PPTX = 新交付件（不动原稿） | AI 唯一编辑层 | convert→改PPTD→check→build 新文件 |
 | **B2 用户也改PPTX** | 用户在 PowerPoint 里手改 | AI 与用户轮替，PPTX 为同步点 | ping-pong resync（§2.3） |
 
 **识别信号**（按下表判，拿不准就问一句）：
@@ -74,7 +74,7 @@ B 内部还分两种，**区别只在"谁动 PPTX"**：
 | 信号 | 判定 |
 |---|---|
 | 用户交回一份**改过的 .pptx**（路径或 mtime 与上次 build 不同） | B2 → 先 `convert` 那份做新 baseline |
-| 用户说"我打开改 / 我自己调 / 在PowerPoint里加 / 手动改" | B2 → 走版本化文件名协议 |
+| 用户说"我打开改 / 我自己调 / 在PowerPoint里加 / 手动改" | B2 → ping-pong resync（§2.3），就地覆盖 |
 | 用户只描述改动（"把…改成 / 加上 / 换掉"）且没碰 PPTX | B1 |
 | 模糊（"帮我改下，我也会看看"） | 问一句："这改动你自己用 PowerPoint 改（改完把文件给我），还是我改 PPTD？" |
 
@@ -127,8 +127,8 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 [ "$cur" = "$old" ] && echo "unchanged → skip convert" || "$SF" convert <用户的>.pptx <work_dir>
 ```
 
-- `.src.hash` 记的是“上次 pptx↔pptd 同步点的 pptx 哈希”。**sync point = 每次 convert 后、或每次 build（覆盖 pptx）后**——两者都让 pptx 与 pptd 一致，都要更新 .src.hash。
-- 所以 AI 回合开头只需比一次 hash：相同 → pptd 已最新，跳 convert；不同 → 用户改过，re-convert 吸收。
+- `.src.hash` 记的是"上次 pptx↔pptd 同步点的 pptx 哈希"。**sync point = 每次 convert 后（B1/B2 通用）；B2 的 build 因覆盖原稿，build 后也是 sync point、需更新 .src.hash；B1 的 build 输出新文件、不碰原稿，原稿哈希不变、不更新**。
+- 所以 **B2 回合开头**比一次 hash：相同 → pptd 已最新，跳 convert；不同 → 用户改过，re-convert 吸收。**B1 原稿静态**，convert 一次即可；跨会话恢复 work_dir 时用 hash 跳过冗余 convert。
 - `.src.hash` 持久化在 work_dir，跨会话也有效（用户隔天回来编辑同一 pptx，hash 同 → 直接用旧 pptd）。
 
 ---

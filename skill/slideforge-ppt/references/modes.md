@@ -87,25 +87,26 @@ B 内部分 **B1 纯AI改 / B2 用户也改PPTX** 两个子模式，识别见 SK
 
 用户只描述改动、不碰 PPTX。走标准循环：
 
-4. **check → build**：
+4. **check → build（输出新文件，不碰原稿）**：
    ```bash
    "$SF" check <work_dir>/deck.pptd
-   "$SF" build <work_dir>/deck.pptd --output <用户给的>.pptx   # 覆盖同一文件（§2.3 铁律 1）
-   sha256of <用户给的>.pptx > <work_dir>/.src.hash             # build 后也是 sync point
+   "$SF" build <work_dir>/deck.pptd --output <交付件>.pptx      # ≠ 原稿，见下
    ```
-   小迭代**不重新 convert**，直接在 `<work_dir>` 上改完 build。
-   - **覆盖前 skip 守卫（同 §2.3 铁律 6）**：若 step 1 convert 报了 skip（table/chart 等），
-     覆盖原稿前**必须先告诉用户**“会丢失 skip 的 X，原稿不可恢复”，让用户决定备份/转 C；
-     未确认前先 build 到 `<原稿>-wip.pptx`，别直接覆盖。
+   - **B1 不覆盖原稿**：交付件默认 `<原稿 stem>-edited.pptx`（与原稿同目录）。
+     原稿始终保留作安全网；小迭代在同一 `<交付件>.pptx` 上覆盖（AI 自己的衍生品，可覆盖）。
+   - **与 B2 的根本区别**：B2 因 ping-pong 必须"一个文件覆盖"（§2.3 铁律 1）；
+     B1 无此约束，故留原稿。B1 的 `.src.hash` 只在初始 convert 后写一次（原稿静态，不更新）。
+   - **skip 非破坏**：convert 若 skip 了 table/chart，交付件里没有，但原稿还在——
+     交付时如实标注（§4），用户可接受或转 C 重做该页，数据不丢。
 
-5. **交付**：告诉用户“已更新 <那一份>.pptx”。**诚实标注 convert 缺口**（见 SKILL.md §4）：
-   若原稿有 table/chart 被 skip，产物里没有它们——要么用户接受，要么转 C 模式补。
+5. **交付**：给 `<交付件>.pptx` 绝对路径 + 结构摘要。**诚实标注 convert 缺口**（见 §4）：
+   若原稿有 table/chart 被 skip，交付件里没有——原稿仍完整，用户可转 C 模式重做该页。
    若出现"某处两词粘一起"→ 纯空白 run 空格丢失（xmltree 限制），手动在 PPTD 补空格再 build。
 
 ### B2 用户也改PPTX（ping-pong resync）
 
-**触发**：用户在 PowerPoint 里手改了那份 .pptx（与上轮 build 同一文件），存盘后说“改完了”。
-核心：就一个 .pptx 文件，AI 与用户轮替，绝不并发。详见 SKILL.md §2.3 铁律 + §2.4 hash。
+**触发**：用户在 PowerPoint 里手改了那份 .pptx（与上轮 build 同一文件），存盘后说"改完了"。
+协议（一个文件、轮替不并发、6 铁律）见 SKILL.md §2.3；hash 跳过见 §2.4。以下是分步命令。
 
 4. **resync（比 hash 决定是否 convert）**：
    ```bash
@@ -117,7 +118,7 @@ B 内部分 **B1 纯AI改 / B2 用户也改PPTX** 两个子模式，识别见 SK
    - hash 相同 → 用户没改（或只看），跳过 convert，pptd 即当前。
    - hash 不同 → convert 吸收用户改动做新 baseline；读 stderr skip：用户在 PPTX 里加了 table/chart 会 skip → AI 需在 PPTD 用 shape+text 补，或该页转 C 重生成。
 
-5. **在新 baseline 上做 AI 这轮改动**：按上方“定向编辑 PPTD”。同元素冲突默认用户赢——若 AI 要改的元素用户上轮已动过（re-convert 后值与预期不符），先问用户以谁为准，别盲改。
+5. **在新 baseline 上做 AI 这轮改动**：按上方"定向编辑 PPTD"。同元素冲突默认用户赢（铁律 5）：re-convert 后值与预期不符，先问用户以谁为准，别盲改。
 
 6. **check → build（覆盖同一文件，不生成副本）**：
    ```bash
@@ -125,8 +126,8 @@ B 内部分 **B1 纯AI改 / B2 用户也改PPTX** 两个子模式，识别见 SK
    "$SF" build <work_dir>/deck.pptd --output <用户的>.pptx       # 就地覆盖
    sha256of <用户的>.pptx > <work_dir>/.src.hash               # build 后也是 sync point
    ```
-   - **交给用户前先 build（flush）**，确保用户下一轮编辑基线含 AI 全部改动。
-   - 上次 convert 有 skip 时，覆盖前提醒用户“会丢失 skip 内容，自行决定是否备份”。
+   - 交给用户前先 build（flush，铁律 3），确保用户下一轮编辑基线含 AI 全部改动。
+   - 有 skip 时覆盖前提醒用户"会丢失 skip 内容，自行决定是否备份"（铁律 6）。
 
 7. **交回用户**：说“已更新 <那一份>.pptx”，等用户在 PowerPoint 改完存盘后说“改完了” → 回第 4 步。
    仅在用户真改了时付一次 convert（秒级），文本/形状/图片高保真。
