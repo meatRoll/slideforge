@@ -2,7 +2,7 @@
 name: slideforge-ppt
 description: Create or edit PowerPoint (.pptx) presentations fully locally and offline via the SlideForge CLI. PPTD (YAML) is the editable layer; PPTX<->PPTD convert bidirectionally, so you can also edit an existing .pptx in place. Use when the user wants to make, modify, restyle, or iterate on a deck without any browser/cloud/login. Three flows - generate from a topic, edit an existing .pptx in place, or restyle using a reference .pptx.
 license: MIT
-compatibility: Bundles prebuilt `slideforge` binaries (macOS arm64/x86_64) in `bin/` with a per-host dispatcher; falls back to a local `cargo build --release` or PATH on Linux/Windows. Works offline. macOS/Windows/Linux.
+compatibility: Bundles prebuilt `slideforge` binaries (macOS/Linux x86_64+arm64, Windows x86_64) in `bin/` with a per-host dispatcher; falls back to a local `cargo build --release` or PATH on other hosts. Works offline. macOS/Windows/Linux.
 metadata:
   project: slideforge
 ---
@@ -29,7 +29,7 @@ metadata:
 
 ## 1. Bootstrap：定位 `slideforge` 派发器（每个会话跑一次）
 
-技能自带 macOS arm64/x86_64 预编译二进制（`bin/` 下，按三元组命名），由多平台派发器按宿主自动选；无预编译时回退到 PATH。
+技能自带五平台预编译二进制（`bin/` 下，按三元组命名：macOS/Linux 各 x86_64+arm64、Windows x86_64），由多平台派发器按宿主自动选；无预编译时回退到 PATH。重建全部平台用 `scripts/cross-build.sh --install`（Linux/Windows 走 cargo-zigbuild + zig，macOS 原生 `cargo build --target`）。
 
 **本技能所有相对路径（`bin/`、`references/`）都相对技能目录**（即本 SKILL.md 所在目录；pi 在系统提示的 `<location>` 给了它的绝对路径）。据此把 `bin/slideforge` 解析成绝对路径再赋给 `$SF`：
 
