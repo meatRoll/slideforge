@@ -627,6 +627,11 @@ cargo run -- convert 某模板.pptx ./converted
 丢弃**：图表、表格等会逐项报告（页号 + 元素名 + 原因），转换照常成功。改完后再
 `build` 回 PPTX 做往返验证。
 
+版式（layouts）行为：每个 slideMaster 下的**全部** slideLayout 都会转换——包括没
+有页面引用的版式（在 PowerPoint 里把页面改指到别的版式后 re-convert，原版式定义
+不会丢）；版式键名用模板自带的语义名 `<p:cSld name>`（如 `cover` / `标题幻灯片`），
+无名时才回退 `layout_N`，重名自动加 `_2`/`_3` 后缀。页面用 `layout: <键名>` 引用。
+
 > 注意：PPTX→PPTD 不是完美无损的。用户反馈格式错乱时，对照原 PPTX 修 PPTD。
 
 ---
