@@ -12,6 +12,7 @@
 
 pub mod cli;
 pub mod error;
+pub mod hash;
 pub mod pptd;
 pub mod pptx;
 

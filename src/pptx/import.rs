@@ -18,6 +18,9 @@
 //! number, element name and reason (charts, tables, image fills, unusual
 //! geometry or transforms…).
 //!
+//! [`crate::hash`] bookkeeping is built in: `convert` compares the source
+//! `.pptx` hash against the `.src.hash` sidecar in the output directory and
+//! skips work when they match; a completed conversion writes a fresh hash.
 //! Fidelity contract: element geometry is converted with the exact inverse of
 //! the writer's px↔EMU mapping (`12700` EMU per px), so rebuilding a converted
 //! project reproduces the original XML coordinates to the EMU.
@@ -29,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 use xmltree::Element as XmlEl;
 
+use crate::hash;
 use crate::pptd::ast::{Page, Presentation};
 use crate::pptd::elements::{
     Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Media, Shape, ShapeDef, Text,
@@ -88,13 +92,44 @@ pub struct ConvertReport {
     pub media_count: usize,
     /// Unsupported constructs (honest failures, never silent).
     pub skipped: Vec<Skipped>,
+    /// SHA-256 of the source `.pptx`, also recorded in the `.src.hash`
+    /// sidecar. `None` only when a stored hash matched and nothing was
+    /// re-converted (a fresh sync point re-emits the hash anyway).
+    pub src_hash: Option<String>,
+    /// SHA-256 matched the stored `.src.hash` before this call: the source
+    /// is already in sync, so **no conversion was performed**. Callers must
+    /// not overwrite `work_dir` after a skipped convert.
+    pub skipped_unchanged: bool,
 }
 
 /// clrScheme slot → hex color (already uppercase, no `#`).
 type SlotColors = BTreeMap<String, String>;
 
 /// Convert a `.pptx` package into a PPTD project directory.
+///
+/// The source hash is checked against the `.src.hash` sidecar in `out_dir`
+/// first: if it matches the last sync point, this is a no-op (returns a
+/// report with [`ConvertReport::skipped_unchanged`] set) and the existing
+/// PPTD project is left untouched. To re-convert from scratch, delete the
+/// output directory (which removes the sidecar) and convert again.
 pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertReport> {
+    // Sync-point check: identical source hash (same file, since the sidecar
+    // records which file the hash belongs to) → the PPTD project in
+    // `out_dir` already reflects this exact `.pptx`; converting again would
+    // waste time and could clobber agent edits. Skip, and say so loudly.
+    if hash::matches_stored(input, out_dir)? {
+        return Ok(ConvertReport {
+            output_dir: out_dir.to_path_buf(),
+            page_count: 0,
+            element_count: 0,
+            media_count: 0,
+            skipped: Vec::new(),
+            src_hash: None,
+            skipped_unchanged: true,
+        });
+    }
+    let src_hash = hash::sha256_of(input)?;
+
     let file = fs::File::open(input)
         .map_err(|e| Error::Invalid(format!("cannot open {}: {e}", input.display())))?;
     let mut zip = zip::ZipArchive::new(file)
@@ -337,6 +372,11 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
     fs::write(out_dir.join("deck.pptd"), deck_yaml)
         .map_err(|e| Error::Invalid(format!("write deck.pptd: {e}")))?;
 
+    // Successful conversion = new sync point. Record the source hash (and
+    // which file it refers to) so the next `convert` of the same file is
+    // recognized as a no-op, and so an overwriting `build` can auto-sync.
+    hash::write_stored(out_dir, &src_hash, Some(input))?;
+
     // DROP TABLE-like safety: report the skipped constructs.
     Ok(ConvertReport {
         output_dir: out_dir.to_path_buf(),
@@ -344,6 +384,8 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         element_count,
         media_count,
         skipped,
+        src_hash: Some(src_hash),
+        skipped_unchanged: false,
     })
 }
 
@@ -910,11 +952,11 @@ fn layout_key(layout_part: &str) -> String {
 fn layout_display_name(zip: &mut zip::ZipArchive<fs::File>, layout_part: &str) -> Option<String> {
     let el = parse_part(zip, layout_part).ok()?;
     let c_sld = first(&el, "cSld")?;
-    let name = attr(&c_sld, "name")?.trim();
+    let name = attr(c_sld, "name")?.trim();
     if name.is_empty() {
         None
     } else {
-        Some(name.to_string())
+        Some(name.to_owned())
     }
 }
 
@@ -2589,13 +2631,11 @@ fn map_pic(
     // poster frame. Map to the dedicated Media element so the clip
     // survives conversion instead of degrading to a still picture.
     let nv_pr = first(el, "nvPicPr").and_then(|n| first(n, "nvPr"));
-    let av = nv_pr
-        .map(|n| {
-            first(n, "videoFile")
-                .map(|v| ("video", v))
-                .or_else(|| first(n, "audioFile").map(|a| ("audio", a)))
-        })
-        .flatten();
+    let av = nv_pr.and_then(|n| {
+        first(n, "videoFile")
+            .map(|v| ("video", v))
+            .or_else(|| first(n, "audioFile").map(|a| ("audio", a)))
+    });
     if let Some((kind, av_el)) = av {
         return map_media(el, kind, av_el, rels, ctx, group, name, x);
     }
@@ -2665,6 +2705,9 @@ fn map_pic(
 /// a poster-less audio icon) — the deck then needs a poster at build time,
 /// so the skip report says so instead of silently producing an unbuildable
 /// element.
+// `_group` is kept for signature uniformity with the other `map_*` dispatch
+// targets; the poster-clip mapping itself never needs it.
+#[allow(clippy::too_many_arguments)]
 fn map_media(
     el: &XmlEl,
     kind: &str,
@@ -2701,7 +2744,7 @@ fn map_media(
         .and_then(|b| first(b, "blip"))
         .and_then(|b| attr(b, "embed"))
         .and_then(|rid| rels.get(rid))
-        .map(|target| target.clone());
+        .cloned();
     let poster = poster.map(|part| {
         let basename = part.rsplit('/').next().unwrap_or(&part).to_string();
         ctx.media.entry(part).or_insert_with(|| basename.clone());

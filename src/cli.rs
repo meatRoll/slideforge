@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
 use crate::Result;
+use crate::hash;
 use crate::pptd;
 use crate::pptx;
 
@@ -41,8 +42,20 @@ pub enum Command {
         /// Output `.pptx` path; defaults to `<entry basename>.pptx`.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Record the output's SHA-256 as the sync point in the project's
+        /// `.src.hash` sidecar. Use for in-place edit flows where the output
+        /// overwrites the source `.pptx` the PPTD was converted from; the
+        /// next `convert` of that file will then be skipped as unchanged.
+        #[arg(long)]
+        sync: bool,
     },
     /// Reverse-compile an existing `.pptx` package into a PPTD project.
+    ///
+    /// The source hash is compared against the `.src.hash` sidecar in the
+    /// output directory: when it matches the last sync point the conversion
+    /// is skipped ("unchanged → skipped convert", exit code 0) and the
+    /// existing PPTD is left untouched. To start over, delete the output
+    /// directory (which removes the sidecar) and convert again.
     Convert {
         /// Input `.pptx` package.
         file: PathBuf,
@@ -57,7 +70,7 @@ impl Cli {
         match self.command {
             Command::Check { file } => run_check(&file),
             Command::Dump { file } => run_dump(&file),
-            Command::Build { file, output } => run_build(&file, output.as_deref()),
+            Command::Build { file, output, sync } => run_build(&file, output.as_deref(), sync),
             Command::Convert { file, output } => run_convert(&file, &output),
         }
     }
@@ -66,6 +79,17 @@ impl Cli {
 fn run_convert(input: &Path, out_dir: &Path) -> i32 {
     match pptx::import::convert_pptx_to_pptd(input, out_dir) {
         Ok(report) => {
+            if report.skipped_unchanged {
+                println!(
+                    "unchanged → skipped convert ({} already in sync with {})",
+                    out_dir.join("deck.pptd").display(),
+                    input.display()
+                );
+                println!(
+                    "  hint: the existing PPTD reflects this exact .pptx; edit it directly. To start over, delete the output directory and convert again."
+                );
+                return 0;
+            }
             println!(
                 "converted {} → {}",
                 input.display(),
@@ -91,6 +115,9 @@ fn run_convert(input: &Path, out_dir: &Path) -> i32 {
                 for (reason, count) in &by_reason {
                     println!("    - {count}x {reason}");
                 }
+            }
+            if let Some(hash) = &report.src_hash {
+                println!("  sync point recorded: .src.hash = {hash}");
             }
             0
         }
@@ -169,7 +196,7 @@ fn run_dump(entry: &Path) -> i32 {
     0
 }
 
-fn run_build(entry: &Path, output: Option<&Path>) -> i32 {
+fn run_build(entry: &Path, output: Option<&Path>, sync: bool) -> i32 {
     let project = match load(entry) {
         Ok(project) => project,
         Err(err) => {
@@ -190,9 +217,65 @@ fn run_build(entry: &Path, output: Option<&Path>) -> i32 {
     let output_path = output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| entry.with_extension("pptx"));
+
+    // Overwrite guard: refuse to clobber external edits. If the output
+    // overwrites the file recorded as the sync-point source and that file's
+    // current content no longer matches the recorded hash, the .pptx was
+    // edited after the last sync point and the PPTD has not absorbed those
+    // changes — building now would silently destroy them.
+    let external_edit = match hash::overwrites_sync_source(&output_path, &project.root_dir) {
+        true => match hash::matches_stored(&output_path, &project.root_dir) {
+            Ok(matches) => !matches,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return 1;
+            }
+        },
+        false => false,
+    };
+    if external_edit {
+        eprintln!(
+            "refusing to build: {} changed after the last sync point (external edit?) and these changes are NOT in the PPTD",
+            output_path.display()
+        );
+        eprintln!("  building now would permanently overwrite them.");
+        eprintln!(
+            "  fix: run `slideforge convert {} {}` first to absorb the external changes,",
+            output_path.display(),
+            project.root_dir.display()
+        );
+        eprintln!("  then redo the PPTD edits on the fresh baseline and build again.");
+        return 2;
+    }
+
     match pptx::writer::PptxWriter::new(&project).build(&output_path) {
         Ok(()) => {
             println!("wrote {}", output_path.display());
+            // Sync-point bookkeeping: record the output hash when either
+            // (a) `--sync` was passed explicitly, or (b) the output
+            // overwrites the file recorded as the sync-point source — i.e.
+            // this build IS the next sync point, no flag needed. Without
+            // this, a forgotten flag would make the next `convert`
+            // misread the agent's own build as an external edit.
+            let auto_sync = hash::overwrites_sync_source(&output_path, &project.root_dir);
+            if sync || auto_sync {
+                match hash::sha256_of(&output_path).and_then(|h| {
+                    hash::write_stored(&project.root_dir, &h, Some(&output_path)).map(|_| h)
+                }) {
+                    Ok(h) => {
+                        if auto_sync && !sync {
+                            println!(
+                                "  auto-sync: output overwrites the convert source; sync point recorded: .src.hash = {h}"
+                            );
+                        } else {
+                            println!("  sync point recorded: .src.hash = {h}");
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("warning: could not record .src.hash: {err}");
+                    }
+                }
+            }
             0
         }
         Err(err) => {
