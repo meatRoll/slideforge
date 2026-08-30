@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Edit and build PPTX presentations from the PPTD language"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 keywords = ["pptx", "pptd", "presentation", "ooxml", "slides"]
 categories = ["command-line-utilities", "encoding"]
 readme = "README.md"
@@ -19,6 +19,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # XML reading for the PPTX → PPTD reverse compiler (`pptx::import`);
 # forward XML is still emitted through the hand-rolled builder in `pptx::xml`.
 xmltree = "0.11"
+sha2 = "0.11.0"
 
 [profile.release]
 lto = "thin"
