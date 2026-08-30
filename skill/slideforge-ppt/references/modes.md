@@ -28,7 +28,7 @@
    - 含 `style="..."` 的富文本一律用块标量 `|`，避免 YAML 误解析。
    - `elementId` 页内唯一；`bounds` 之和不超过画布。
 
-5. **进标准循环**（SKILL.md §3）：`check` → `build` → (Quick Look 第 1 页) → 反馈 → 改 → 重 build。
+5. **进标准循环**（SKILL.md §3）：`check` → `build` → （可用预览工具看一眼） → 反馈 → 改 → 重 build。
 
 6. **交付**：给 .pptx 绝对路径 + 结构摘要；保留 `mydeck/` 供迭代。
 

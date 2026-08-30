@@ -161,7 +161,7 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
    ↓ 有 issue → 修 PPTD → 重 check
 "$SF" build <deck.pptd> --output <out>.pptx
    ↓ build 内部先校验，不过则拒绝写文件（退出码 2）
-(可选) qlmanage -t -s 1024 <out>.pptx -o /tmp  # Quick Look 看第 1 页（仅 macOS）
+(可选) 本机可用的预览工具看一眼首屏
    ↓
 给用户 .pptx 路径 + 结构摘要 → 收集反馈 → 回到"编辑 PPTD"
 ```
@@ -188,9 +188,9 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
   （模板常用小行距空段做节间距，行距丢失会把后续文字顶出文本框——已在 build 侧修复）。
 - custGeom→SVG path、主题色、文本/形状/图片/图标保真度高。
 
-**PowerPoint ≠ LibreOffice 渲染**（本地验证的盲区，务必注意）：
-- 本地无 PowerPoint 时用 LibreOffice/pdftoppm 预览；它能渲染≠PowerPoint 能渲染。
-  实战案例：line 的 custGeom path 坐标超 int32（`w=91249817500`）时 LibreOffice 归一化后
+**PowerPoint ≠ 本地预览器渲染**（本地验证的盲区，务必注意）：
+- 本机可用的渲染预览（自行探测有什么可用）能渲染≠PowerPoint 能渲染。
+  实战案例：line 的 custGeom path 坐标超 int32（`w=91249817500`）时预览器归一化后
   渲染正常，PowerPoint 却把直线画出幻灯片边界。若用户报“PowerPoint 里不对但预览正常”，
   先查产物 XML 的数值边界（所有 `x/y/cx/cy/path w/h` 应 < 2^31）。
 - 预览正常但用户仍说不对时，不要只靠截图对比，**直接 unzip 产物 diff 原稿 XML**（元素级
@@ -202,10 +202,10 @@ cur=$(sha256of <用户的>.pptx); old=$(cat <work_dir>/.src.hash 2>/dev/null)
 
 ## 5. 视觉 QA 的真相（诚实设预期）
 
-- **Quick Look 只渲染第 1 页缩略图**：`qlmanage -t -s 1024 x.pptx -o /tmp` → 只能看封面（仅 macOS；Linux/Windows 无 qlmanage，跳过此步，直接让用户在 PowerPoint/WPS 打开）。
-  只适合单页肉眼核对。
-- **多页视觉检查**：让用户在 PowerPoint / Keynote / WPS 打开产物。本技能无 LibreOffice，
-  不能批量渲染所有页。
+- **预览工具取决于环境**：自行探测本机可用的 PPTX 渲染手段并使用（注意各工具的局限，
+  如有的只能出首页缩略图）；都没有就直接让用户在 PowerPoint / Keynote / WPS 打开。
+  预览结果仅供参考（见上节盲区）。
+- **多页视觉检查**：让用户在 PowerPoint / Keynote / WPS 打开产物。
 - **结构检查**：`"$SF" dump <deck.pptd>` 看每页元素数与类型分布，与预期对照。
 - **（可选）往返保真自检**：B 模式 build 后，可再 `convert` 产物回 PPTD，对比元素数
   有无掉失。不作为默认步骤。
