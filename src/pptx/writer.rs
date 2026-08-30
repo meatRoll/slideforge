@@ -275,11 +275,18 @@ impl<'a> PptxWriter<'a> {
             let mut rels = vec![Rel::new("rId1", rel_kind::SLIDE_LAYOUT, &layout_target)];
             for (pos, src) in used.iter().enumerate() {
                 let part_index = media.index_of(src)?;
-                let path = media.part(part_index).package_path.clone();
+                let part = media.part(part_index);
+                // Audio/video clips need the video/audio rel type (plus the
+                // p14:media embed on the element); images stay IMAGE.
+                let kind = match part.extension.as_str() {
+                    "mp4" | "m4v" | "mov" => rel_kind::VIDEO,
+                    "mp3" | "m4a" | "wav" | "wma" => rel_kind::AUDIO,
+                    _ => rel_kind::IMAGE,
+                };
                 rels.push(Rel::new(
                     &format!("rId{}", pos + 2),
-                    rel_kind::IMAGE,
-                    rel_target(&path),
+                    kind,
+                    rel_target(&part.package_path),
                 ));
             }
             entries.push(PackageEntry::opaque(
@@ -622,8 +629,15 @@ fn collect_media_from(
         push(src, &mut out);
     }
     for element in elements {
-        if let Element::Image(image) = element {
-            push(&image.src, &mut out);
+        match element {
+            Element::Image(image) => push(&image.src, &mut out),
+            Element::Video(m) | Element::Audio(m) => {
+                push(&m.src, &mut out);
+                if let Some(poster) = &m.poster {
+                    push(poster, &mut out);
+                }
+            }
+            _ => {}
         }
     }
     out

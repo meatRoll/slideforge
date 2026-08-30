@@ -13,8 +13,8 @@ use crate::pptd::shared::{
     ImageFitMode, LineStyle, Shadow, VerticalAlign,
 };
 use crate::pptd::{
-    Element, Icon, Image, Line, LineCurve, PlaceholderDef, Shape, Text, TextAutofit, TextContent,
-    TextDirection, Theme,
+    Element, Icon, Image, Line, LineCurve, Media, PlaceholderDef, Shape, Text, TextAutofit,
+    TextContent, TextDirection, Theme,
 };
 use crate::{Error, Result};
 
@@ -82,6 +82,8 @@ pub fn render_element(
         Element::Line(line) => render_line(xml, ctx, line),
         Element::Icon(icon) => render_icon(xml, ctx, icon),
         Element::Image(image) => render_image(xml, ctx, image),
+        Element::Video(m) => render_media(xml, ctx, m, "video"),
+        Element::Audio(m) => render_media(xml, ctx, m, "audio"),
         other => Err(Error::Unsupported(format!(
             "element `{}` of type `{}` on page {} is not supported yet \
              (supported so far: text, shape, line, icon, image)",
@@ -1894,6 +1896,94 @@ fn render_image(xml: &mut Xml, ctx: &mut RenderCtx<'_>, image: &Image) -> Result
         xml.leaf("a:softEdge", &[("rad", &rad.to_string())]);
         xml.end("a:effectLst");
     }
+    xml.end("p:spPr");
+    xml.end("p:pic");
+    Ok(())
+}
+
+/// Render an embedded audio/video clip: the OOXML "media picture" — a
+/// `p:pic` whose `nvPr` carries the `a:videoFile`/`a:audioFile` reference
+/// plus the `p14:media` extension (PowerPoint 2010+ proper media embed;
+/// the legacy r:link fallback stays for old renderers), with the poster
+/// image as the picture's blip.
+fn render_media(xml: &mut Xml, ctx: &mut RenderCtx<'_>, m: &Media, kind: &str) -> Result<()> {
+    let id = ctx.next_id().to_string();
+    let name = m.common.element_id.clone();
+    let media_rid = ctx.media_rid(&m.src).ok_or_else(|| {
+        Error::Invalid(format!(
+            "internal error: media `{}` was not registered before rendering",
+            m.src
+        ))
+    })?;
+    let poster_rid = m
+        .poster
+        .as_deref()
+        .and_then(|p| ctx.media_rid(p))
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "media element `{}` needs a poster image (png/jpg) — \"
+                 PowerPoint requires a visible frame for clips",
+                m.common.element_id
+            ))
+        })?;
+
+    let (av_element, _av_rel_kind) = if kind == "video" {
+        ("a:videoFile", super::opc::rel_kind::VIDEO)
+    } else {
+        ("a:audioFile", super::opc::rel_kind::AUDIO)
+    };
+    // The .rels entry's video/audio type is chosen by the writer from the
+    // media part's extension; av_rel_kind documents the pairing.
+    let _ = _av_rel_kind;
+
+    xml.start("p:pic", &[]);
+    xml.start("p:nvPicPr", &[]);
+    xml.start("p:cNvPr", &[("id", &id), ("name", &name)]);
+    // Media clips carry a hyperlink-free clickable-object hint.
+    xml.leaf(
+        "a:hlinkClick",
+        &[("r:id", ""), ("action", "ppaction://media")],
+    );
+    xml.end("p:cNvPr");
+    xml.leaf("p:cNvPicPr", &[]);
+    xml.start("p:nvPr", &[]);
+    xml.leaf(av_element, &[("r:link", &media_rid)]);
+    // PowerPoint 2010+ extension: marks the pic as a true media object.
+    xml.start("a:extLst", &[]);
+    xml.start(
+        "a:ext",
+        &[("uri", "{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}")],
+    );
+    xml.start(
+        "p14:media",
+        &[
+            (
+                "xmlns:p14",
+                "http://schemas.microsoft.com/office/powerpoint/2010/main",
+            ),
+            ("r:embed", &media_rid),
+        ],
+    );
+    xml.end("p14:media");
+    xml.end("a:ext");
+    xml.end("a:extLst");
+    xml.end("p:nvPr");
+    xml.end("p:nvPicPr");
+
+    // Poster frame as the picture fill.
+    xml.start("p:blipFill", &[]);
+    xml.start("a:blip", &[("r:embed", &poster_rid)]);
+    xml.end("a:blip");
+    xml.start("a:stretch", &[]);
+    xml.leaf("a:fillRect", &[]);
+    xml.end("a:stretch");
+    xml.end("p:blipFill");
+
+    xml.start("p:spPr", &[]);
+    xfrm(xml, m.common.bounds, m.common.rotation, m.common.flip);
+    xml.start("a:prstGeom", &[("prst", "rect")]);
+    xml.leaf("a:avLst", &[]);
+    xml.end("a:prstGeom");
     xml.end("p:spPr");
     xml.end("p:pic");
     Ok(())

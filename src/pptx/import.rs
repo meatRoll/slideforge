@@ -31,7 +31,7 @@ use xmltree::Element as XmlEl;
 
 use crate::pptd::ast::{Page, Presentation};
 use crate::pptd::elements::{
-    Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Shape, ShapeDef, Text,
+    Element, ElementCommon, GroupDef, GroupXfrm, Icon, Image, Line, Media, Shape, ShapeDef, Text,
     TextAutofit, TextContent, TextDirection,
 };
 use crate::pptd::layout::{LayoutDef, PlaceholderDef};
@@ -2584,6 +2584,22 @@ fn map_pic(
     let xfrm = sp_pr.and_then(|p| first(p, "xfrm"))?;
     let x = Xform::parse(xfrm).apply(group);
 
+    // Embedded media? `nvPr` carries `a:videoFile`/`a:audioFile` (r:link to
+    // the clip) + the `p14:media` extension; the `p:pic`'s blip is the
+    // poster frame. Map to the dedicated Media element so the clip
+    // survives conversion instead of degrading to a still picture.
+    let nv_pr = first(el, "nvPicPr").and_then(|n| first(n, "nvPr"));
+    let av = nv_pr
+        .map(|n| {
+            first(n, "videoFile")
+                .map(|v| ("video", v))
+                .or_else(|| first(n, "audioFile").map(|a| ("audio", a)))
+        })
+        .flatten();
+    if let Some((kind, av_el)) = av {
+        return map_media(el, kind, av_el, rels, ctx, group, name, x);
+    }
+
     let (src, _part) = match embed.and_then(|rid| rels.get(rid)) {
         Some(target) => {
             let ext = target.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -2641,6 +2657,68 @@ fn map_pic(
         shadow: None,
         soft_edge,
     }))
+}
+
+/// Map a media `p:pic` (`a:videoFile`/`a:audioFile` in `nvPr`) to a
+/// [`Media`] element: the clip itself from the r:link target, the poster
+/// from the pic's blip (r:embed). The blip may be absent (PowerPoint keeps
+/// a poster-less audio icon) — the deck then needs a poster at build time,
+/// so the skip report says so instead of silently producing an unbuildable
+/// element.
+fn map_media(
+    el: &XmlEl,
+    kind: &str,
+    av_el: &XmlEl,
+    rels: &BTreeMap<String, String>,
+    ctx: &mut PageCtx<'_>,
+    _group: Option<&Xform>,
+    name: String,
+    x: Xform,
+) -> Option<Element> {
+    // `a:videoFile r:link` → local attribute name `link`.
+    let link = attr(av_el, "link").and_then(|rid| rels.get(rid));
+    let Some(target) = link else {
+        ctx.skip(&name, "media clip without r:link target");
+        return None;
+    };
+    let ext = target.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if !matches!(
+        ext.as_str(),
+        "mp4" | "m4v" | "mov" | "mp3" | "m4a" | "wav" | "wma"
+    ) {
+        ctx.skip(
+            &name,
+            format!("media clip extension .{ext} is not supported"),
+        );
+        return None;
+    }
+    let basename = target.rsplit('/').next().unwrap_or(target).to_string();
+    let part = target.clone();
+    ctx.media.entry(part).or_insert_with(|| basename.clone());
+
+    // Poster frame: the pic's blip r:embed (kept as-is; png/jpg only).
+    let poster = first(el, "blipFill")
+        .and_then(|b| first(b, "blip"))
+        .and_then(|b| attr(b, "embed"))
+        .and_then(|rid| rels.get(rid))
+        .map(|target| target.clone());
+    let poster = poster.map(|part| {
+        let basename = part.rsplit('/').next().unwrap_or(&part).to_string();
+        ctx.media.entry(part).or_insert_with(|| basename.clone());
+        format!("media/{basename}")
+    });
+
+    let id = ctx.unique_id(&name, kind);
+    let media = Media {
+        common: common(&x, id),
+        src: format!("media/{basename}"),
+        poster,
+    };
+    Some(if kind == "video" {
+        Element::Video(Box::new(media))
+    } else {
+        Element::Audio(Box::new(media))
+    })
 }
 
 /// Map `a:srcRect` ppm values to PPTD fit/crop.

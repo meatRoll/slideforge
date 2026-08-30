@@ -82,7 +82,7 @@ interface LayoutDef {
 - `placeholders` is keyed by OOXML placeholder type (`title`, `body`,
   `subTitle`, `dt`, …) — see §5.
 - `groups` is a SlideForge round-trip field (same shape as `Page.groups`);
-  see [`pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md) §5.
+  see [`pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md) §7.
 
 ## 5. `PlaceholderDef`
 

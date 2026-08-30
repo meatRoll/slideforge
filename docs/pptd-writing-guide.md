@@ -11,7 +11,7 @@
 > **SlideForge 的 group 扩展**见 [`docs/pptd-group-extension.md`](./pptd-group-extension.md)
 > （`ElementCommon.groupId`/`groupBounds` + `Page.groups`，扁平形式不变、writer 重建 `<p:grpSp>`，保留 WPS 组合选择框）。
 > **SlideForge 的 round-trip 扩展字段**见 [`docs/pptd-roundtrip-extension.md`](./pptd-roundtrip-extension.md)
-> （`Text.fill/border`、`TextContent` 的 autofit/margin/bullet/bodyPrExtras、`Border.gradient`、`Shadow.scale+inner`、`GradientFill.scaled`、`Image.softEdge` 等，convert 写出、build 尊重、手写可忽略）。
+> （`Text.fill/border`、`TextContent` 的 autofit/margin/bullet/bodyPrExtras、`Border.gradient`、`Shadow.scale+inner`、`GradientFill.scaled`、`Image.softEdge`、`video`/`audio` 嵌入媒体元素等，convert 写出、build 尊重、手写可忽略）。
 > 这些文档是 AI 编辑 PPTD 时的权威参考。Moonshot 的参考资料在「形状库 / 字体库 /
 > 设计系统 / 场景分类」上更完整，写作时互补。
 
@@ -78,6 +78,7 @@ cargo run -- convert 某模板.pptx ./converted
 | `shape` custom（SVG path） | ✅ | ✅ | ✅（custGeom 公式求值→path） |
 | `line` 连线 | ✅ | ✅ | ✅ |
 | `image` 图片 | ✅ | ✅ | ✅ |
+| `video` / `audio` 嵌入媒体 | ✅ | ✅（需 poster 海报帧） | ✅（p:pic+videoFile/audioFile） |
 | `icon`（Font Awesome 7.x） | ✅ | ✅ | ✅ |
 | `table` 表格 | ✅ | ❌ `not supported yet` | ⚠️ 视元素而定，可能 skip |
 | `chart` 图表 | ⚠️ 仅 5 类 series | ❌ `not supported yet` | skip |
@@ -353,7 +354,21 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 渲染顺序固定：`crop`（调源矩形）→ `fit`（适配 bounds）→ `cropShape`（形状裁剪）。
 注意 `image.shadow` 当前 `build` 仍静默丢弃（shape 的 shadow 已支持）。
 
-### 7.5 icon 图标（Font Awesome 7.x free）
+### 7.5 video / audio 嵌入媒体
+
+```yaml
+- elementId: demo-clip
+  elementType: video            # 或 audio
+  bounds: [400, 200, 480, 270]
+  src: media/clip.mp4           # mp4/m4v/mov · mp3/m4a/wav/wma
+  poster: media/poster.png      # 播放前显示的海报帧（png/jpg，必填）
+```
+
+渲染为 OOXML 媒体图片（`p:pic` + `a:videoFile`/`a:audioFile` + `p14:media`
+扩展）；`convert` 遇到源 PPTX 里的嵌入媒体会还原成此元素，媒体文件字节级
+保真。播放控制（自动播放/循环/音量）暂不支持，PowerPoint 默认点击播放。
+
+### 7.6 icon 图标（Font Awesome 7.x free）
 
 ```yaml
 - elementId: bulb
@@ -365,7 +380,7 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 
 检索：https://fontawesome.com/search?ic=free-collection
 
-### 7.6 table 表格（check/dump 可用，build 暂不支持）
+### 7.7 table 表格（check/dump 可用，build 暂不支持）
 
 ```yaml
 - elementId: tbl
@@ -391,7 +406,7 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 > ⚠️ build 阶段遇到 `table` 会报 `not supported yet` 并中止。要出 PPTX 请用
 > `shape`+`text` 手工拼装表格。
 
-### 7.7 chart 图表（check/dump 仅 5 类 series，build 不支持）
+### 7.8 chart 图表（check/dump 仅 5 类 series，build 不支持）
 
 ```yaml
 - elementId: trend

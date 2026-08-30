@@ -69,7 +69,7 @@ fn jpeg_size(data: &[u8]) -> Option<ImageSize> {
     None
 }
 
-/// One raster part staged for the OPC package.
+/// One media part staged for the OPC package.
 #[derive(Debug, Clone)]
 pub struct MediaPart {
     /// Original source path inside the deck (used for deduplication).
@@ -77,7 +77,7 @@ pub struct MediaPart {
     /// Path in the ZIP archive, e.g. `ppt/media/image3.png`.
     pub package_path: String,
     pub extension: String,
-    pub content_type: ContentType,
+    pub content_type: Option<ContentType>,
     pub data: Vec<u8>,
     pub size: ImageSize,
 }
@@ -112,41 +112,65 @@ impl MediaRegistry {
             source,
         })?;
 
-        let extension = match Path::new(&path)
+        let extension = Path::new(&path)
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-        {
-            Some(ext) if ext == "png" || ext == "jpg" || ext == "jpeg" => ext,
-            Some(other) => {
-                return Err(Error::Unsupported(format!(
-                    "media `{src}` uses unsupported image extension `{other}` (png/jpg/jpeg)"
-                )));
-            }
-            None => {
-                return Err(Error::Unsupported(format!(
-                    "media `{src}` has no image extension (png/jpg/jpeg)"
-                )));
-            }
-        };
-        let content_type = if extension == "png" {
-            ContentType::ImagePng
-        } else {
-            ContentType::ImageJpeg
-        };
-        let size = sniff_size(&data).ok_or_else(|| {
-            Error::Unsupported(format!("media `{src}` is not a readable PNG/JPEG image"))
-        })?;
+            .map(|e| e.to_ascii_lowercase());
 
+        // Raster images: dimensions are needed for fit/crop math.
+        if matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")) {
+            let extension = extension.expect("checked above");
+            let content_type = if extension == "png" {
+                ContentType::ImagePng
+            } else {
+                ContentType::ImageJpeg
+            };
+            let size = sniff_size(&data).ok_or_else(|| {
+                Error::Unsupported(format!("media `{src}` is not a readable PNG/JPEG image"))
+            })?;
+            let index = self.parts.len();
+            let package_path = format!("ppt/media/image{}.{extension}", index + 1);
+            self.parts.push(MediaPart {
+                src: src.to_owned(),
+                package_path,
+                extension,
+                content_type: Some(content_type),
+                data,
+                size,
+            });
+            self.index.insert(src.to_owned(), index);
+            return Ok(index);
+        }
+
+        // Audio/video clips: carried verbatim (no dimension sniffing; the
+        // zero size is unused by the media element renderer). PowerPoint
+        // identifies clips by the part's content-type Default entry.
+        let extension = extension.ok_or_else(|| {
+            Error::Unsupported(format!(
+                "media `{src}` has no file extension (png/jpg/jpeg or a/v)"
+            ))
+        })?;
+        if !matches!(
+            extension.as_str(),
+            "mp4" | "m4v" | "mov" | "mp3" | "m4a" | "wav" | "wma"
+        ) {
+            return Err(Error::Unsupported(format!(
+                "media `{src}` uses unsupported extension `{extension}` \
+                 (images: png/jpg/jpeg; a/v: mp4/m4v/mov/mp3/m4a/wav/wma)"
+            )));
+        }
         let index = self.parts.len();
-        let package_path = format!("ppt/media/image{}.{extension}", index + 1);
+        let package_path = format!("ppt/media/media{}.{}", index + 1, extension);
         self.parts.push(MediaPart {
             src: src.to_owned(),
             package_path,
             extension,
-            content_type,
+            content_type: None, // covered by a Default entry, not an Override
             data,
-            size,
+            size: ImageSize {
+                width: 0,
+                height: 0,
+            },
         });
         self.index.insert(src.to_owned(), index);
         Ok(index)
@@ -162,7 +186,7 @@ impl MediaRegistry {
         self.parts
     }
 
-    /// Unique lowercase extensions used (`png` / `jpg` / `jpeg`).
+    /// Unique lowercase extensions used (`png` / `jpg` / `jpeg` / a/v).
     pub fn extensions(&self) -> Vec<String> {
         let mut seen: Vec<String> = Vec::new();
         for part in &self.parts {

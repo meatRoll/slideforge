@@ -1,4 +1,4 @@
-<!-- Synced from docs/pptd-roundtrip-extension.md · self-contained skill copy · re-sync when source changes. -->
+<!-- Synced from docs/pptd-roundtrip-extension.md · self-contained skill copy · re-sync when source changes. Cross-links between pptd-*.md resolve within this folder. -->
 
 # PPTD Round-trip Extension (SlideForge)
 
@@ -85,7 +85,33 @@ adds:
 | `listIndent` | `number?` | Hanging indent (px; negative pulls the bullet left of `marL`). |
 | `bodyPrExtras` | `Record<string, string>?` | Raw `a:bodyPr` attributes not covered above (e.g. `vertOverflow`, `horzOverflow`, `numCol`, `compatLnSpc`, `anchorCtr`, `forceAA`) — preserved verbatim so PowerPoint/WPS layout quirks round-trip instead of falling back to engine defaults. |
 
-## 4. `Image`
+## 4. `Media` element (video / audio) — SlideForge extension
+
+Canonical PPTD v2 has no embedded audio/video. SlideForge adds
+`elementType: video` / `elementType: audio` (same payload, different OOXML
+emission) so clips survive convert/build instead of degrading to a still
+poster picture:
+
+```yaml
+- elementId: demo-clip
+  elementType: video          # or: audio
+  bounds: [400, 200, 480, 270]
+  src: media/clip.mp4         # mp4/m4v/mov · mp3/m4a/wav/wma
+  poster: media/poster.png    # png/jpg frame shown before playback
+```
+
+| field | type | meaning |
+|---|---|---|
+| `src` | `string` | Media file, relative to the deck dir; copied to `ppt/media/mediaN.<ext>` with a `video/mp4` etc. Default content-type entry and a `video`/`audio` relationship. |
+| `poster` | `string?` | Still image used as the media picture's blip (required at build time — PowerPoint needs a visible frame). |
+
+`convert` maps a `p:pic` whose `nvPr` carries `a:videoFile`/`a:audioFile`
+(`p14:media` extension) to this element; `build` emits the full media
+picture (`p:cNvPr` + `ppaction://media`, `a:videoFile`/`a:audioFile`
+`r:link`, `p14:media r:embed`, poster blip). Clips are carried verbatim
+(byte-identical round-trip).
+
+## 5. `Image`
 
 Canonical `Image` has `rotation`/`opacity`/`flip`/`src`/`cropShape`/`fit`/`crop`/
 `border`/`shadow`. SlideForge adds:
@@ -94,7 +120,7 @@ Canonical `Image` has `rotation`/`opacity`/`flip`/`src`/`cropShape`/`fit`/`crop`
 |---|---|---|
 | `softEdge` | `number?` | Soft-edge radius (px) written as `a:softEdge rad` in the picture's effect list (e.g. a feathered circular avatar). |
 
-## 5. Layout extension additions
+## 6. Layout extension additions
 
 [`pptd-layout-extension.md`](./pptd-layout-extension.md) defines
 `LayoutDef{background, elements, placeholders}`. SlideForge adds:
@@ -103,7 +129,7 @@ Canonical `Image` has `rotation`/`opacity`/`flip`/`src`/`cropShape`/`fit`/`crop`
 |---|---|---|
 | `LayoutDef.groups` | `Record<string, GroupDef>?` | Reconstructed `<p:grpSp>` metadata for the layout's *decorative* elements (same shape as `Page.groups`; see [`pptd-group-extension.md`](./pptd-group-extension.md)). |
 
-## 6. Group extension additions
+## 7. Group extension additions
 
 [`pptd-group-extension.md`](./pptd-group-extension.md) defines
 `GroupDef{xfrm, name, parent}`. SlideForge adds:
@@ -112,7 +138,7 @@ Canonical `Image` has `rotation`/`opacity`/`flip`/`src`/`cropShape`/`fit`/`crop`
 |---|---|---|
 | `GroupDef.fill` | `Fill?` | The group's own fill (`<p:grpSpPr>` solidFill/gradFill). Emitted so `<a:grpFill>` children inherit it and renderers that paint the group's fill (QuickLook) show the banner. |
 
-## 7. Build-side support
+## 8. Build-side support
 
 All fields above are respected by `build` (rendered to the corresponding
 OOXML) except where the README roadmap marks a feature as not yet emitted

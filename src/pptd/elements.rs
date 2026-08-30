@@ -57,6 +57,14 @@ pub enum Element {
     Shape(Shape),
     Line(Line),
     Image(Image),
+    /// Embedded video/audio (`p:pic` + `a:videoFile`/`a:audioFile` in OOXML).
+    /// Boxed to keep the enum small; carries a poster frame + the media file.
+    /// Two variants share [`Media`] so `elementType: video` / `audio` map to
+    /// the same payload (the variant selects `a:videoFile` vs `a:audioFile`).
+    #[serde(rename = "video")]
+    Video(Box<Media>),
+    #[serde(rename = "audio")]
+    Audio(Box<Media>),
     Icon(Icon),
     Table(Table),
     /// Charts are the largest element; boxed to keep the enum small.
@@ -71,6 +79,8 @@ impl Element {
             Element::Shape(_) => "shape",
             Element::Line(_) => "line",
             Element::Image(_) => "image",
+            Element::Video(_) => "video",
+            Element::Audio(_) => "audio",
             Element::Icon(_) => "icon",
             Element::Table(_) => "table",
             Element::Chart(_) => "chart",
@@ -83,6 +93,7 @@ impl Element {
             Element::Shape(e) => &e.common.element_id,
             Element::Line(e) => &e.common.element_id,
             Element::Image(e) => &e.common.element_id,
+            Element::Video(e) | Element::Audio(e) => &e.common.element_id,
             Element::Icon(e) => &e.common.element_id,
             Element::Table(e) => &e.common.element_id,
             Element::Chart(e) => &e.common.element_id,
@@ -95,6 +106,7 @@ impl Element {
             Element::Shape(e) => e.common.bounds,
             Element::Line(e) => e.common.bounds,
             Element::Image(e) => e.common.bounds,
+            Element::Video(e) | Element::Audio(e) => e.common.bounds,
             Element::Icon(e) => e.common.bounds,
             Element::Table(e) => e.common.bounds,
             Element::Chart(e) => e.common.bounds,
@@ -107,6 +119,7 @@ impl Element {
             Element::Shape(e) => e.common.opacity,
             Element::Line(e) => e.common.opacity,
             Element::Image(e) => e.common.opacity,
+            Element::Video(e) | Element::Audio(e) => e.common.opacity,
             Element::Icon(e) => e.common.opacity,
             Element::Table(e) => e.common.opacity,
             Element::Chart(e) => e.common.opacity,
@@ -120,6 +133,7 @@ impl Element {
             Element::Shape(e) => &e.common,
             Element::Line(e) => &e.common,
             Element::Image(e) => &e.common,
+            Element::Video(e) | Element::Audio(e) => &e.common,
             Element::Icon(e) => &e.common,
             Element::Table(e) => &e.common,
             Element::Chart(e) => &e.common,
@@ -134,6 +148,7 @@ impl Element {
             Element::Shape(e) => &mut e.common,
             Element::Line(e) => &mut e.common,
             Element::Image(e) => &mut e.common,
+            Element::Video(e) | Element::Audio(e) => &mut e.common,
             Element::Icon(e) => &mut e.common,
             Element::Table(e) => &mut e.common,
             Element::Chart(e) => &mut e.common,
@@ -359,6 +374,24 @@ pub struct Image {
     /// effect list (e.g. circular avatar badges with a feathered edge).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soft_edge: Option<f64>,
+}
+
+/// `elementType: video` / `elementType: audio` — an embedded media clip.
+/// Rendered as the OOXML media picture (`p:pic` whose `nvPr` carries
+/// `a:videoFile`/`a:audioFile` + `p14:media` extension). `poster` is the
+/// still image PowerPoint shows before playback (the blip of the media
+/// `p:pic`); `src` is the media file itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Media {
+    #[serde(flatten)]
+    pub common: ElementCommon,
+    /// Media file (mp4/m4v/mp3/wav/m4a/…), relative to the deck dir.
+    pub src: String,
+    /// Poster/preview image shown before playback (video) or as the
+    /// speaker-card art (audio); png/jpg like `Image.src`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
 }
 
 /// `elementType: icon` — a Font Awesome 7.x icon, `iconName` is `style:name`.
