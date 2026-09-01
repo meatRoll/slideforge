@@ -97,9 +97,7 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
      [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(sed -n 1p "$d/.sync.hash")" ] \
        && echo IN_SYNC || echo STALE; fi
    ```
-   - IN_SYNC → pptd 即当前，直接改；STALE（含 .sync.hash 缺失，或旧版
-     .src.hash/.build.hash 尚未迁移）→ 先 convert 再改（convert 会把旧
-     sidecar 自动迁移进 .sync.hash）。
+   - IN_SYNC → pptd 即当前，直接改；STALE（含 .sync.hash 缺失）→ 先 convert 再改。
    - 这是每轮编辑的前置动作，不是可选步骤：忘了它，build 覆盖源文件时会被
      "changed after its last recorded sync point" 拒绝（退出码 2），整轮编辑白做。
    - 这个检查很便宜（一条命令），比“每轮先 convert”更容易被遵守；检查结果
@@ -137,15 +135,13 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 ```
 
 - **读到 `unchanged → skipped convert` 就直接改 PPTD**：说明 pptd 已与该 pptx 完全同步，
-  不要覆盖 work_dir（跳过的 convert 不碰 PPTD，但会把旧版 sidecar 迁移进 .sync.hash）。
+  不要覆盖 work_dir。
 - 记录按**文件**计，不按内容计：路径不同哪怕内容相同也不互认；一个 work_dir 可
   以跟踪多个文件（convert 源 + 多个 build 产物互不踩）。
 - **写入即记账**：convert 记它转换的源，build 记它写出的产物，无需任何旗标。
   所以 B 模式就地覆盖后，下一轮 convert 自然 skip；A/C 模式迭代下一轮 build 自然放行。
 - 旁车文件持久化在 work_dir，跨会话有效（用户隔天回来编辑同一 pptx，
   hash 同 → 自动跳过冗余 convert）。
-- 旧版 `.src.hash`/`.build.hash`（含仅 hash 无路径的更老格式）在 convert/build 时
-  自动迁移进 `.sync.hash` 并删除旧文件；无法定归属的无路径记录由 convert 重绑到当前输入。
 - 文件被外部改过（哈希变）→ convert 正常执行吸收改动；skip（table/chart）处理方式
   见 §2.2 铁律 3/5 与 §4。
 

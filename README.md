@@ -30,6 +30,7 @@ slideforge/
 │   ├── error.rs           # thiserror 统一错误
 │   ├── hash.rs            # .sync.hash 同步记录（convert/build 写入即记账 / build 覆写守卫）
 │   ├── pptd/              # PPTD 语言
+│   │   ├── mod.rs         # 模块导出 + Project（入口 + 页面序列）
 │   │   ├── ast.rs         # Presentation / Page
 │   │   ├── shared.rs      # Color / Bounds / Fill / Border / Shadow ...
 │   │   ├── theme.rs       # Theme / TextStyleConfig / TableStyleConfig
@@ -40,6 +41,7 @@ slideforge/
 │   │   ├── parser.rs      # YAML → AST（主入口 + 页面加载，校验 version=v2）
 │   │   └── validate.rs    # 语义校验：id 唯一、bounds 合法、主题引用、表格/图表结构
 │   └── pptx/              # OOXML / OPC 双向管线
+│       ├── mod.rs         # 模块注释与导出
 │       ├── package.rs     # content-type 与包条目模型
 │       ├── opc.rs         # 命名空间、关系类型、[Content_Types].xml / .rels
 │       ├── xml.rs         # 迷你缩进 XML 写入器
@@ -59,7 +61,8 @@ slideforge/
 │   ├── validate.rs          # 校验测试
 │   ├── build_pptx.rs        # 端到端 OPC 包测试
 │   ├── reverse.rs           # PPTX → PPTD → PPTX 往返回归
-│   └── schema_guard.rs      # OOXML 结构守卫（对应曾触发 WPS 修复的回归规则）
+│   ├── schema_guard.rs      # OOXML 结构守卫（对应曾触发 WPS 修复的回归规则）
+│   └── guard.rs             # .sync.hash 同步与覆写守卫测试
 ├── docs/                    # 规范与设计文档（索引见下）
 ├── skill/slideforge-ppt/    # 开箱即用的 agent 技能（含五平台预编译二进制）
 └── scripts/                 # install-hooks.sh / cross-build.sh
@@ -84,7 +87,7 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
 
 `convert` 提取 layer（母版→布局→页面自底向上烘焙）、文本框/形状/连线/图片/图标、主题色与尺寸，并把自定义几何（custGeom）的 guide 公式求值后写成 SVG path；母版/版式写入 `Presentation.layouts`（布局扩展），`<p:grpSp>` 组合以组合扩展重建而非拍平。**不支持的元素不会静默丢弃**：图表、表格等会在报告里逐项列出（页号 + 元素名 + 原因），转换照常成功。
 
-**`.sync.hash` 同步记录与覆写守卫**：项目目录只有一个旁车文件 `.sync.hash`，每两行一条记录（hash + 路径），记的是"本项目上次合法写入某文件时它的 hash"——`convert` 记它转换的源，`build` 记它写出的产物，**写入即记账**，无需旗标。之后对同一文件再 `convert`，若实时哈希未变则跳过（"unchanged → skipped convert"）；旧版 `.src.hash`/`.build.hash` 旁车（含仅哈希格式）会在 convert/build 时自动迁移合并。`build` 对已存在的输出文件强制验明正身：实时计算其哈希与记录比对，一致才允许覆盖；被外部改过、或无记录无法担保，一律拒绝构建（退出码 2）并提示先 `convert` 吸收——**build 绝不静默覆盖它无法担保的文件**，这是「就地编辑已有 PPTX」流程的安全网。
+**`.sync.hash` 同步记录与覆写守卫**：项目目录只有一个旁车文件 `.sync.hash`，每两行一条记录（hash + 路径），记的是“本项目上次合法写入某文件时它的 hash”——`convert` 记它转换的源，`build` 记它写出的产物，**写入即记账**，无需旗标。之后对同一文件再 `convert`，若实时哈希未变则跳过（“unchanged → skipped convert”）。`build` 对已存在的输出文件强制验明正身：实时计算其哈希与记录比对，一致才允许覆盖；被外部改过、或无记录无法担保，一律拒绝构建（退出码 2）并提示先 `convert` 吸收——**build 绝不静默覆盖它无法担保的文件**，这是「就地编辑已有 PPTX」流程的安全网。
 
 ## 已实现能力（writer）
 
