@@ -19,7 +19,7 @@
 //! geometry or transforms…).
 //!
 //! [`crate::hash`] bookkeeping is built in: `convert` compares the source
-//! `.pptx` hash against the `.src.hash` sidecar in the output directory and
+//! `.pptx` hash against the `.sync.hash` records in the output directory and
 //! skips work when they match; a completed conversion writes a fresh hash.
 //! Fidelity contract: element geometry is converted with the exact inverse of
 //! the writer's px↔EMU mapping (`12700` EMU per px), so rebuilding a converted
@@ -92,14 +92,19 @@ pub struct ConvertReport {
     pub media_count: usize,
     /// Unsupported constructs (honest failures, never silent).
     pub skipped: Vec<Skipped>,
-    /// SHA-256 of the source `.pptx`, also recorded in the `.src.hash`
+    /// SHA-256 of the source `.pptx`, also recorded in the `.sync.hash`
     /// sidecar. `None` only when a stored hash matched and nothing was
     /// re-converted (a fresh sync point re-emits the hash anyway).
     pub src_hash: Option<String>,
-    /// SHA-256 matched the stored `.src.hash` before this call: the source
+    /// SHA-256 matched the stored record before this call: the source
     /// is already in sync, so **no conversion was performed**. Callers must
     /// not overwrite `work_dir` after a skipped convert.
     pub skipped_unchanged: bool,
+    /// True when legacy sidecars (`.src.hash`/`.build.hash`, including the
+    /// old hash-only format) were migrated into `.sync.hash` during this
+    /// call. Path-less records cannot authorize `build`'s overwrite guard,
+    /// so they are repaired here.
+    pub migrated_sidecars: bool,
 }
 
 /// clrScheme slot → hex color (already uppercase, no `#`).
@@ -107,17 +112,37 @@ type SlotColors = BTreeMap<String, String>;
 
 /// Convert a `.pptx` package into a PPTD project directory.
 ///
-/// The source hash is checked against the `.src.hash` sidecar in `out_dir`
+/// The source hash is checked against the `.sync.hash` records in `out_dir`
 /// first: if it matches the last sync point, this is a no-op (returns a
 /// report with [`ConvertReport::skipped_unchanged`] set) and the existing
 /// PPTD project is left untouched. To re-convert from scratch, delete the
 /// output directory (which removes the sidecar) and convert again.
 pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertReport> {
-    // Sync-point check: identical source hash (same file, since the sidecar
-    // records which file the hash belongs to) → the PPTD project in
-    // `out_dir` already reflects this exact `.pptx`; converting again would
-    // waste time and could clobber agent edits. Skip, and say so loudly.
-    if hash::matches_stored(input, out_dir)? {
+    // Sync-point check: identical source hash (records are keyed by file
+    // path) → the PPTD project in `out_dir` already reflects this exact
+    // `.pptx`; converting again would waste time and could clobber agent
+    // edits. Skip, and say so loudly.
+    let mut records = hash::Records::load(out_dir);
+    let mut migrated = records.has_legacy();
+    let src_hash = hash::sha256_of(input)?;
+
+    // Re-bind a legacy path-less hash to this input when it matches, so an
+    // old-format sidecar heals itself instead of leaving the build's
+    // overwrite guard unable to attribute the file.
+    if records.get(input).is_none() {
+        if let Some(legacy) = records.legacy_hash() {
+            if *legacy == src_hash {
+                records.set(input, &src_hash);
+                migrated = true;
+            }
+        }
+    }
+
+    if records.get(input) == Some(&src_hash) {
+        if migrated {
+            // Persist the migration; the PPTD itself is left untouched.
+            records.save(out_dir)?;
+        }
         return Ok(ConvertReport {
             output_dir: out_dir.to_path_buf(),
             page_count: 0,
@@ -126,9 +151,9 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
             skipped: Vec::new(),
             src_hash: None,
             skipped_unchanged: true,
+            migrated_sidecars: migrated,
         });
     }
-    let src_hash = hash::sha256_of(input)?;
 
     let file = fs::File::open(input)
         .map_err(|e| Error::Invalid(format!("cannot open {}: {e}", input.display())))?;
@@ -372,10 +397,11 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
     fs::write(out_dir.join("deck.pptd"), deck_yaml)
         .map_err(|e| Error::Invalid(format!("write deck.pptd: {e}")))?;
 
-    // Successful conversion = new sync point. Record the source hash (and
-    // which file it refers to) so the next `convert` of the same file is
-    // recognized as a no-op, and so an overwriting `build` can auto-sync.
-    hash::write_stored(out_dir, &src_hash, Some(input))?;
+    // Successful conversion = new sync point: record the source's hash so
+    // the next `convert` of the same file is recognized as a no-op, and an
+    // overwriting `build` can verify the file it is about to replace.
+    records.set(input, &src_hash);
+    records.save(out_dir)?;
 
     // DROP TABLE-like safety: report the skipped constructs.
     Ok(ConvertReport {
@@ -386,6 +412,7 @@ pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertRepor
         skipped,
         src_hash: Some(src_hash),
         skipped_unchanged: false,
+        migrated_sidecars: migrated,
     })
 }
 

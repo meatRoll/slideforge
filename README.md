@@ -28,7 +28,7 @@ slideforge/
 │   ├── lib.rs             # crate 入口（pptd / pptx / cli / error / hash）
 │   ├── cli.rs             # clap 子命令：check / dump / build / convert
 │   ├── error.rs           # thiserror 统一错误
-│   ├── hash.rs            # .src.hash 同步点（convert 跳过 / build 覆写保护）
+│   ├── hash.rs            # .sync.hash 同步记录（convert/build 写入即记账 / build 覆写守卫）
 │   ├── pptd/              # PPTD 语言
 │   │   ├── ast.rs         # Presentation / Page
 │   │   ├── shared.rs      # Color / Bounds / Fill / Border / Shadow ...
@@ -84,7 +84,7 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
 
 `convert` 提取 layer（母版→布局→页面自底向上烘焙）、文本框/形状/连线/图片/图标、主题色与尺寸，并把自定义几何（custGeom）的 guide 公式求值后写成 SVG path；母版/版式写入 `Presentation.layouts`（布局扩展），`<p:grpSp>` 组合以组合扩展重建而非拍平。**不支持的元素不会静默丢弃**：图表、表格等会在报告里逐项列出（页号 + 元素名 + 原因），转换照常成功。
 
-**`.src.hash` 同步点**：`convert`（及 `build --sync`）把源 `.pptx` 的 SHA-256 记录到项目目录的 `.src.hash`。之后对同一文件再 `convert`，若哈希未变则跳过（"unchanged → skipped convert"）；`build` 若要覆写同步点源文件、而该文件在同步点之后被外部修改过，会拒绝构建并提示先 `convert` 吸收改动——这是「就地编辑已有 PPTX」流程的安全网。
+**`.sync.hash` 同步记录与覆写守卫**：项目目录只有一个旁车文件 `.sync.hash`，每两行一条记录（hash + 路径），记的是"本项目上次合法写入某文件时它的 hash"——`convert` 记它转换的源，`build` 记它写出的产物，**写入即记账**，无需旗标。之后对同一文件再 `convert`，若实时哈希未变则跳过（"unchanged → skipped convert"）；旧版 `.src.hash`/`.build.hash` 旁车（含仅哈希格式）会在 convert/build 时自动迁移合并。`build` 对已存在的输出文件强制验明正身：实时计算其哈希与记录比对，一致才允许覆盖；被外部改过、或无记录无法担保，一律拒绝构建（退出码 2）并提示先 `convert` 吸收——**build 绝不静默覆盖它无法担保的文件**，这是「就地编辑已有 PPTX」流程的安全网。
 
 ## 已实现能力（writer）
 
@@ -118,7 +118,7 @@ cargo run -- convert 公司模板.pptx ./converted && cargo run -- build ./conve
     - [x] 页/版式背景图片填充（`a:blipFill`）
     - [ ] table / chart 元素、notes / animations
 - [x] OPC 打包（`zip` crate），产出可编辑 .pptx
-- [x] pptx → pptd 反向解析（`slideforge convert`）：母版/版式烘焙进 layouts、组合重建、custGeom → SVG path、`.src.hash` 同步点与覆写保护
+- [x] pptx → pptd 反向解析（`slideforge convert`）：母版/版式烘焙进 layouts、组合重建、custGeom → SVG path、`.sync.hash` 同步记录与覆写守卫
 - [x] agent 技能 `skill/slideforge-ppt/`（五平台预编译二进制 + 设计系统参考）与 `v*` tag 触发的多平台 release workflow
 - [ ] 图表 → 原生 OOXML chart parts、动画 → `p:timing`、备注 → notesSlide
 

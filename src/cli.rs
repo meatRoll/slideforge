@@ -36,22 +36,22 @@ pub enum Command {
         file: PathBuf,
     },
     /// Compile a PPTD project into a `.pptx` package.
+    ///
+    /// Overwrite guard: an existing output file may only be overwritten when
+    /// its current hash (computed live) matches the value recorded in the
+    /// project's `.sync.hash` sidecar when this project last wrote it;
+    /// otherwise the build is refused (exit code 2) instead of destroying
+    /// unknown edits. Every successful build refreshes the record.
     Build {
         /// Path to the `.pptd` main entry file.
         file: PathBuf,
         /// Output `.pptx` path; defaults to `<entry basename>.pptx`.
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Record the output's SHA-256 as the sync point in the project's
-        /// `.src.hash` sidecar. Use for in-place edit flows where the output
-        /// overwrites the source `.pptx` the PPTD was converted from; the
-        /// next `convert` of that file will then be skipped as unchanged.
-        #[arg(long)]
-        sync: bool,
     },
     /// Reverse-compile an existing `.pptx` package into a PPTD project.
     ///
-    /// The source hash is compared against the `.src.hash` sidecar in the
+    /// The source hash is compared against the `.sync.hash` records in the
     /// output directory: when it matches the last sync point the conversion
     /// is skipped ("unchanged → skipped convert", exit code 0) and the
     /// existing PPTD is left untouched. To start over, delete the output
@@ -70,7 +70,7 @@ impl Cli {
         match self.command {
             Command::Check { file } => run_check(&file),
             Command::Dump { file } => run_dump(&file),
-            Command::Build { file, output, sync } => run_build(&file, output.as_deref(), sync),
+            Command::Build { file, output } => run_build(&file, output.as_deref()),
             Command::Convert { file, output } => run_convert(&file, &output),
         }
     }
@@ -88,6 +88,9 @@ fn run_convert(input: &Path, out_dir: &Path) -> i32 {
                 println!(
                     "  hint: the existing PPTD reflects this exact .pptx; edit it directly. To start over, delete the output directory and convert again."
                 );
+                if report.migrated_sidecars {
+                    println!("  note: legacy .src.hash/.build.hash records migrated to .sync.hash");
+                }
                 return 0;
             }
             println!(
@@ -117,7 +120,10 @@ fn run_convert(input: &Path, out_dir: &Path) -> i32 {
                 }
             }
             if let Some(hash) = &report.src_hash {
-                println!("  sync point recorded: .src.hash = {hash}");
+                println!("  sync point recorded: {} = {hash}", input.display());
+            }
+            if report.migrated_sidecars {
+                println!("  note: legacy .src.hash/.build.hash records migrated to .sync.hash");
             }
             0
         }
@@ -196,7 +202,7 @@ fn run_dump(entry: &Path) -> i32 {
     0
 }
 
-fn run_build(entry: &Path, output: Option<&Path>, sync: bool) -> i32 {
+fn run_build(entry: &Path, output: Option<&Path>) -> i32 {
     let project = match load(entry) {
         Ok(project) => project,
         Err(err) => {
@@ -218,63 +224,79 @@ fn run_build(entry: &Path, output: Option<&Path>, sync: bool) -> i32 {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| entry.with_extension("pptx"));
 
-    // Overwrite guard: refuse to clobber external edits. If the output
-    // overwrites the file recorded as the sync-point source and that file's
-    // current content no longer matches the recorded hash, the .pptx was
-    // edited after the last sync point and the PPTD has not absorbed those
-    // changes — building now would silently destroy them.
-    let external_edit = match hash::overwrites_sync_source(&output_path, &project.root_dir) {
-        true => match hash::matches_stored(&output_path, &project.root_dir) {
-            Ok(matches) => !matches,
+    // Overwrite guard: an existing output file may only be clobbered with
+    // positive evidence that its current bytes are accounted for: its live
+    // hash must match the value recorded when this project last legitimately
+    // wrote it (convert or build). Anything else — no record, a record for a
+    // different file, or a hash mismatch — refuses: overwriting a file the
+    // PPTD cannot vouch for could silently destroy external edits.
+    if output_path.exists() {
+        let verdict = match hash::classify_output(&output_path, &project.root_dir) {
+            Ok(verdict) => verdict,
             Err(err) => {
                 eprintln!("error: {err}");
                 return 1;
             }
-        },
-        false => false,
-    };
-    if external_edit {
-        eprintln!(
-            "refusing to build: {} changed after the last sync point (external edit?) and these changes are NOT in the PPTD",
-            output_path.display()
-        );
-        eprintln!("  building now would permanently overwrite them.");
-        eprintln!(
-            "  fix: run `slideforge convert {} {}` first to absorb the external changes,",
-            output_path.display(),
-            project.root_dir.display()
-        );
-        eprintln!("  then redo the PPTD edits on the fresh baseline and build again.");
-        return 2;
+        };
+        use hash::OutputGuard::{InSync, Stale, Uncovered};
+        match verdict {
+            InSync => {}
+            Stale => {
+                eprintln!(
+                    "refusing to build: {} changed after its last recorded sync point (external edit?) and these changes are NOT in the PPTD",
+                    output_path.display()
+                );
+                eprintln!("  building now would permanently overwrite them.");
+                eprintln!(
+                    "  fix: run `slideforge convert {} {}` first to absorb the external changes,",
+                    output_path.display(),
+                    project.root_dir.display()
+                );
+                eprintln!(
+                    "  or delete {} first if discarding them is intended, then build again.",
+                    output_path.display()
+                );
+                return 2;
+            }
+            Uncovered => {
+                eprintln!(
+                    "refusing to build: {} already exists but no sync point covers it — its provenance is unknown",
+                    output_path.display()
+                );
+                eprintln!(
+                    "  overwriting it could destroy external edits that are not in the PPTD."
+                );
+                eprintln!(
+                    "  fix: run `slideforge convert {} {}` first to make it the editable baseline,",
+                    output_path.display(),
+                    project.root_dir.display()
+                );
+                eprintln!("  or delete/rename it, or choose a different --output path.");
+                return 2;
+            }
+        }
     }
 
     match pptx::writer::PptxWriter::new(&project).build(&output_path) {
         Ok(()) => {
             println!("wrote {}", output_path.display());
-            // Sync-point bookkeeping: record the output hash when either
-            // (a) `--sync` was passed explicitly, or (b) the output
-            // overwrites the file recorded as the sync-point source — i.e.
-            // this build IS the next sync point, no flag needed. Without
-            // this, a forgotten flag would make the next `convert`
-            // misread the agent's own build as an external edit.
-            let auto_sync = hash::overwrites_sync_source(&output_path, &project.root_dir);
-            if sync || auto_sync {
-                match hash::sha256_of(&output_path).and_then(|h| {
-                    hash::write_stored(&project.root_dir, &h, Some(&output_path)).map(|_| h)
-                }) {
-                    Ok(h) => {
-                        if auto_sync && !sync {
-                            println!(
-                                "  auto-sync: output overwrites the convert source; sync point recorded: .src.hash = {h}"
-                            );
-                        } else {
-                            println!("  sync point recorded: .src.hash = {h}");
+            // Bookkeeping: the freshly written output becomes the recorded
+            // sync state for this file. That single write both authorizes
+            // the next build over the same path (the A/C-mode iterate loop)
+            // and makes a later `convert` of this file skip as unchanged —
+            // no flag needed, every legitimate write records itself.
+            match hash::sha256_of(&output_path) {
+                Ok(h) => {
+                    let mut records = hash::Records::load(&project.root_dir);
+                    records.set(&output_path, &h);
+                    match records.save(&project.root_dir) {
+                        Ok(()) => {
+                            println!("  sync point recorded: {} = {h}", output_path.display())
                         }
-                    }
-                    Err(err) => {
-                        eprintln!("warning: could not record .src.hash: {err}");
+                        Err(err) => eprintln!("warning: could not record sync point: {err}"),
                     }
                 }
+                Err(err) => eprintln!("warning: could not hash the output for bookkeeping: {err}"),
             }
             0
         }

@@ -67,16 +67,17 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 **唯一红线 = 动 PPTD 之前先验 hash（铁律 2）；一致直接改，不一致先 convert。**
 
 ```
-初始：convert <用户的>.pptx → pptd/（baseline；工具自动写 .src.hash）
+初始：convert <用户的>.pptx → pptd/（baseline；工具自动写入 .sync.hash 记录）
 每轮：
-  ① 验 hash（红线，见铁律 2）：比对源 pptx 与 <work_dir>/.src.hash
+  ① 验 hash（红线，见铁律 2）：实时算源 pptx 的 hash，与 <work_dir>/.sync.hash 里该文件的记录比
       IN_SYNC → 没人动过文件，pptd 即当前，直接进 ③（不必跑 convert）
-      STALE / 无 .src.hash → convert <用户的>.pptx pptd/ 吸收外部改动、刷新 baseline
+      STALE / 无记录 → convert <用户的>.pptx pptd/ 吸收外部改动、刷新 baseline
   ② dump 看结构（STALE 转换后才需要；留意 stderr skip）
   ③ 叠 AI 这轮的 PPTD 改动
-  ④ check → build --output <用户的>.pptx   # 就地覆盖；hash 自动同步（auto-sync）
-      # 若这步被拒（"changed after the last sync point"）：说明漏了 ① 或文件在同步点后
-      # 又被改过 → 先 convert 吸收，再重做 PPTD 改动、重 build。
+  ④ check → build --output <用户的>.pptx   # 就地覆盖；写入即自动记账
+      # build 对已存在的输出文件强制验 hash（实时算），验不过绝不覆盖（见 §2.3）。
+      # 若这步被拒（"changed after its last recorded sync point"）：说明漏了 ① 或文件在
+      # 记录之后又被改过 → 先 convert 吸收，再重做 PPTD 改动、重 build。
   ⑤ 交用户
 ```
 
@@ -85,20 +86,22 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 
 **铁律**：
 1. **就一个文件**：build 输出 = 用户给的那份。不生成副本、不留 `_user`/`_v{n}`。
-   例外：用户明确要求"别动我的原稿"时，`build --output` 到别处（此时产物不是
-   同步点，不影响原文件的同步状态）。
+   例外：用户明确要求"别动我的原稿"时，`build --output` 到别处（原文件的记录
+   不受影响；产物同样会被记账，下次覆盖它同样受守卫保护）。
 2. **红线：动 PPTD 前先验 hash**：对 deck.pptd / pages/*.page 做任何 write/edit
-   之前，先校验源 pptx 与 `work_dir/.src.hash`（第 1 行 hash、第 2 行源路径）：
+   之前，先实时算源 pptx 的 hash，与 `work_dir/.sync.hash` 里该文件的记录比
+   （格式：每两行一条记录 = hash 行 + 路径行；B 模式通常只有一条，即第 1-2 行）：
    ```bash
-   d=<work_dir>; if [ ! -f "$d/.src.hash" ]; then echo STALE; else
-     s=$(sed -n 2p "$d/.src.hash"); [ -f "$s" ] || s="$d/$s"
-     [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(sed -n 1p "$d/.src.hash")" ] \
+   d=<work_dir>; if [ ! -f "$d/.sync.hash" ]; then echo STALE; else
+     s=$(sed -n 2p "$d/.sync.hash"); [ -f "$s" ] || s="$d/$s"
+     [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(sed -n 1p "$d/.sync.hash")" ] \
        && echo IN_SYNC || echo STALE; fi
    ```
-   - IN_SYNC → pptd 即当前，直接改；STALE（含 .src.hash 缺失或旧版无路径行）
-     → 先 convert 再改（convert 会顺带把旧格式 sidecar 刷新成带路径的新格式）。
+   - IN_SYNC → pptd 即当前，直接改；STALE（含 .sync.hash 缺失，或旧版
+     .src.hash/.build.hash 尚未迁移）→ 先 convert 再改（convert 会把旧
+     sidecar 自动迁移进 .sync.hash）。
    - 这是每轮编辑的前置动作，不是可选步骤：忘了它，build 覆盖源文件时会被
-     "changed after the last sync point" 拒绝（退出码 2），整轮编辑白做。
+     "changed after its last recorded sync point" 拒绝（退出码 2），整轮编辑白做。
    - 这个检查很便宜（一条命令），比“每轮先 convert”更容易被遵守；检查结果
      自然指向下一步要不要 convert。
 3. **真转换了才 dump**：unchanged 时结构没变，不浪费；真转换了则读 stderr skip：
@@ -107,10 +110,11 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 5. **首次覆盖前看 skip**：上次 convert 若报告过 skip（table/chart），覆盖会把丢这些写进
    用户文件 → 覆盖前明确告诉用户"这会丢失 X，自行决定是否先备份"。
 
-### 2.3 hash 同步：convert/build 内置，LLM 无需手管
+### 2.3 hash 记账：单旁车 `.sync.hash`，convert/build 内置，LLM 无需手管
 
-**hash 校验已内建在 CLI 里**，不再是 shell 手工活：`convert` 自己比 hash、自己记
-hash，LLM 想忘也忘不掉。同步点哈希存工作目录的 `.src.hash` 旁车文件。
+**hash 校验已内建在 CLI 里**，不再是 shell 手工活，LLM 想忘也忘不掉。工作目录只有
+一个旁车文件 `.sync.hash`：每两行一条记录（hash 行 + 路径行），记的是"本项目上次
+合法写入某文件时它的 hash"。对比的另一侧不存储——**调用的实时算**目标文件当前 hash。
 
 ```bash
 # ① 转换前无需任何比对——工具自己判：
@@ -118,24 +122,30 @@ hash，LLM 想忘也忘不掉。同步点哈希存工作目录的 `.src.hash` �
 #   → 源文件没变时自动跳过：
 #     "unchanged → skipped convert (...)"
 #     "  hint: the existing PPTD reflects this exact .pptx; edit it directly. ..."
-#   → 转换成功时自动记新同步点：
-#     "  sync point recorded: .src.hash = <sha256>"
+#   → 转换成功时自动记账：
+#     "  sync point recorded: <file> = <sha256>"
 
-# ② 就地覆盖时 hash 自动记——无需任何旗标。build 发现输出覆盖了 convert 的源文件，
-#    自动写新同步点：
-#     "  auto-sync: output overwrites the convert source; sync point recorded: ..."
-#    若源文件在同步点后被外部改过（hash 不符），build 会**拒绝**（退出码 2）并提示
-#    先 convert——这防止外部改动被静默覆盖。convert 无重转旗标；要重置就删掉
-#    work_dir（连带 .src.hash）重新 convert。
+# ② build 的覆写守卫：输出文件已存在时，实时算它的 hash 与记录比，验不过绝不覆盖。
+#    放行（二者之一）：输出不存在；.sync.hash 里有它且 hash 一致。
+#    拒绝（退出码 2，文件原样不动）：
+#      - "changed after its last recorded sync point"：文件被外部改过；
+#      - "no sync point covers it"：无记录能担保它（从未被本项目写入/旁车缺失）。
+#    拒绝时按提示走：先 convert 吸收外部改动再重 build；确要弃用该文件则删掉/改名后再 build。
+#    build 成功后自动把自己写的文件记账（写入即记账，无 auto-sync 特例）：
+#     "  sync point recorded: <file> = <sha256>"
+#    convert 无重转旗标；要重置就删掉 work_dir（连带旁车文件）重新 convert。
 ```
 
 - **读到 `unchanged → skipped convert` 就直接改 PPTD**：说明 pptd 已与该 pptx 完全同步，
-  不要覆盖 work_dir（跳过的 convert 没有写入任何文件）。
-- `.src.hash` 记的是"上次 pptx↔pptd 同步点的 pptx 哈希 + 该文件路径"。sync point =
-  每次 convert 成功后（自动写）；build 输出覆盖该源文件时也自动写（auto-sync）。
-  同步点按**文件**计，不按内容计：另一个文件哪怕内容相同也不会被误判 unchanged。
-- `.src.hash` 持久化在 work_dir，跨会话有效（用户隔天回来编辑同一 pptx，
+  不要覆盖 work_dir（跳过的 convert 不碰 PPTD，但会把旧版 sidecar 迁移进 .sync.hash）。
+- 记录按**文件**计，不按内容计：路径不同哪怕内容相同也不互认；一个 work_dir 可
+  以跟踪多个文件（convert 源 + 多个 build 产物互不踩）。
+- **写入即记账**：convert 记它转换的源，build 记它写出的产物，无需任何旗标。
+  所以 B 模式就地覆盖后，下一轮 convert 自然 skip；A/C 模式迭代下一轮 build 自然放行。
+- 旁车文件持久化在 work_dir，跨会话有效（用户隔天回来编辑同一 pptx，
   hash 同 → 自动跳过冗余 convert）。
+- 旧版 `.src.hash`/`.build.hash`（含仅 hash 无路径的更老格式）在 convert/build 时
+  自动迁移进 `.sync.hash` 并删除旧文件；无法定归属的无路径记录由 convert 重绑到当前输入。
 - 文件被外部改过（哈希变）→ convert 正常执行吸收改动；skip（table/chart）处理方式
   见 §2.2 铁律 3/5 与 §4。
 
@@ -226,7 +236,8 @@ hash，LLM 想忘也忘不掉。同步点哈希存工作目录的 `.src.hash` �
 "$SF" dump     <deck.pptd>                    # 打印 AST 摘要（页数/每页元素统计）
 ```
 
-退出码：`check` 0=过 / 2=有 issue(stderr 逐条) / 1=加载失败；`build` 同，外加渲染失败=1。
+退出码：`check` 0=过 / 2=有 issue(stderr 逐条) / 1=加载失败；`build` 同，外加渲染失败=1、
+覆写守卫拒绝=2（输出已存在但实时 hash 与 .sync.hash 记录不符/无记录，见 §2.3）。
 
 ---
 
