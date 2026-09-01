@@ -35,7 +35,7 @@ metadata:
 
 ```bash
 SF=<技能目录>/bin/slideforge     # <技能目录> = 本 SKILL.md 的 dirname（见系统提示 <location>）
-"$SF" --version                   # 确认可用（应输出 slideforge 0.1.0）
+"$SF" --version                   # 确认可用（应输出 slideforge 1.0.0）
 ```
 
 > 派发器找不到合适二进制会退出码 127 并打印修复提示：把对应平台二进制命名为 `slideforge-<triple>` 放进 `bin/`，或把 `slideforge` 装到 PATH（派发器会兜到）。命令示例统一写 `"$SF"`。
