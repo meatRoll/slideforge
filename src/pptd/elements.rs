@@ -394,7 +394,8 @@ pub struct Media {
     pub poster: Option<String>,
 }
 
-/// `elementType: icon` — a Font Awesome 7.x icon, `iconName` is `style:name`.
+/// `elementType: icon` — a Font Awesome icon drawn from the embedded solid
+/// subset (FA 6.7.2), `iconName` is `style:name` (the style prefix is ignored).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Icon {

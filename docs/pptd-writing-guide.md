@@ -79,7 +79,7 @@ cargo run -- convert 某模板.pptx ./converted
 | `line` 连线 | ✅ | ✅ | ✅ |
 | `image` 图片 | ✅ | ✅ | ✅ |
 | `video` / `audio` 嵌入媒体 | ✅ | ✅（需 poster 海报帧） | ✅（p:pic+videoFile/audioFile） |
-| `icon`（Font Awesome 7.x） | ✅ | ✅ | ✅ |
+| `icon`（Font Awesome 6.7.2 内嵌实心子集） | ✅ | ✅ | ✅ |
 | `table` 表格 | ✅ | ❌ `not supported yet` | ⚠️ 视元素而定，可能 skip |
 | `chart` 图表 | ⚠️ 仅 5 类 series | ❌ `not supported yet` | skip |
 | 主题 `colors` / `textStyles` | ✅ | ✅（显式落盘） | ✅ |
@@ -249,13 +249,13 @@ animations: [ ... ]      # 可选；见 §10；build 暂未写 p:timing（路线
 
 ---
 
-## 7. 元素速查（ElementBase + 7 类）
+## 7. 元素速查（ElementBase + 9 类）
 
 所有元素共享 `ElementBase`：
 
 ```yaml
 elementId: title1        # 必填；页内唯一（重复→check 报 duplicate）
-elementType: text       # 必填；text|shape|line|image|icon|table|chart
+elementType: text       # 必填；text|shape|line|image|icon|video|audio|table|chart
 bounds: [x, y, w, h]     # 必填；[x, y, width, height] px；左上为原点
 # 以下三个对所有元素可选（table/chart 的整体旋转/翻转受 PPT 限制，见规范）：
 rotation: 15            # 顺时针度数
@@ -368,15 +368,19 @@ flip: [false, true]     # [水平翻转, 垂直翻转]
 扩展）；`convert` 遇到源 PPTX 里的嵌入媒体会还原成此元素，媒体文件字节级
 保真。播放控制（自动播放/循环/音量）暂不支持，PowerPoint 默认点击播放。
 
-### 7.6 icon 图标（Font Awesome 7.x free）
+### 7.6 icon 图标（Font Awesome 6.7.2 内嵌实心子集）
 
 ```yaml
 - elementId: bulb
   elementType: icon
   bounds: [100, 100, 48, 48]
-  iconName: "fas:lightbulb"    # "style:name"；fas=实心/far=regular/fab=brands
+  iconName: "fas:graduation-cap"   # "style:name"；前缀仅为兼容，全部走内嵌实心字形
   fill: {type: solid, color: "$primary"}
 ```
+
+图标名必须在内嵌数据集里（[`assets/fa-solid-icons.json`](../assets/fa-solid-icons.json)）；
+不在则 build 明确报错（绝不静默丢弃），需按
+[`assets/README.md`](../assets/README.md) 的配方重新生成子集后重编译。
 
 检索：https://fontawesome.com/search?ic=free-collection
 

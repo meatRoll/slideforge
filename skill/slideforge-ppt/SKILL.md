@@ -187,7 +187,8 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 ## 4. 能力边界（决定可行性，动笔前必读）
 
 **`build` 能出 PPTX 的**：`text` / `shape`(含 custom SVG path) / `line` / `image` /
-`icon`(Font Awesome 7.x) + 页背景(solid/gradient/image) + 富文本 + 主题 colors/textStyles。
+`icon`(Font Awesome 6.7.2 内嵌实心子集，仅该子集内的图标) / `video` / `audio`(需 poster)
++ 页背景(solid/gradient/image) + 富文本 + 主题 colors/textStyles。
 
 **`build` 不支持（写了就中止）**：`table` / `chart` / `animations` / `notes`。
 → 要表格/图表：用 `shape`+`text`+`line` 手工拼。要动画/备注：先说明"当前 build 不写"，

@@ -86,7 +86,7 @@ pub fn render_element(
         Element::Audio(m) => render_media(xml, ctx, m, "audio"),
         other => Err(Error::Unsupported(format!(
             "element `{}` of type `{}` on page {} is not supported yet \
-             (supported so far: text, shape, line, icon, image)",
+             (supported so far: text, shape, line, icon, image, video, audio)",
             other.element_id(),
             other.type_name(),
             page_index + 1
