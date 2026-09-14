@@ -11,7 +11,7 @@ slideforge-ppt/
 ├── bin/                ◄ 引擎二进制（派发器 + 按三元组命名的预编译产物，见下方专节）
 └── references/         全部参考材料。按需加载（progressive disclosure），
                          AI 只在用到某主题时 `read` 对应文件，不全塞上下文。
-    ├── modes.md        ◄ 工作流剧本：A 生成 / B 改（每轮先 convert，hash 由代码判）
+    ├── modes.md        ◄ 工作流剧本：A 生成 / B 改（每轮先验 hash，不一致先 convert）
     │                     / C 借风格。进入某模式时读对应小节。
     ├── pptd/           ◄ PPTD 格式规范集（7 份，相互 `./` 互链，整集同目录移动以保链接）
     │   ├── pptd-spec.md              PPTD 规范语义（权威，有出入以此为准）

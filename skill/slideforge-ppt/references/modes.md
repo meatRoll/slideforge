@@ -57,13 +57,13 @@ B 只有一条循环（SKILL.md §2.2）：**动 PPTD 之前先验 hash（红线
 
 1. **验 hash（每轮编辑前的红线动作，见 SKILL.md §2.2 铁律 2）**：
    ```bash
-   d=<work_dir>; if [ ! -f "$d/.src.hash" ]; then echo STALE; else
-     s=$(sed -n 2p "$d/.src.hash"); [ -f "$s" ] || s="$d/$s"
-     [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(sed -n 1p "$d/.src.hash")" ] \
+   d=<work_dir>; if [ ! -f "$d/.sync.hash" ]; then echo STALE; else
+     s=$(sed -n 2p "$d/.sync.hash"); [ -f "$s" ] || s="$d/$s"
+     [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(sed -n 1p "$d/.sync.hash")" ] \
        && echo IN_SYNC || echo STALE; fi
    ```
    - IN_SYNC → 没人动过文件，pptd 即当前，直接去第 3 步；
-   - STALE（含 .src.hash 缺失）→ 先 convert 再动 PPTD。
+   - STALE（含 .sync.hash 缺失）→ 先 convert 再动 PPTD。
 
 2. **STALE 转换后才摸结构**：
    ```bash
@@ -88,13 +88,16 @@ B 只有一条循环（SKILL.md §2.2）：**动 PPTD 之前先验 hash（红线
    "$SF" build <work_dir>/deck.pptd --output <用户给的>.pptx
    ```
    - **就一个文件**：build 输出 = 用户给的那份，不生成副本、不留 `_user`/`_v{n}`。
-   - 覆盖 convert 源文件时 hash **自动记**（输出 `auto-sync: ...`），下一轮 convert
-     才能正确判 "unchanged"；无需任何旗标。
-   - **若被拒绝**（`refusing to build: ... changed after the last sync point`）：
+   - **写入即记账**：build 成功后自动把自己写的文件记进 `.sync.hash`
+     （输出 `sync point recorded: <file> = <sha256>`），下一轮 convert 才能正确判
+     "unchanged"；无需任何旗标。
+   - **若被拒绝**（`refusing to build: ... changed after its last recorded sync point`）：
      说明文件在同步点后被外部改过而 pptd 未吸收。按提示先 convert 吸收，
      再重做 PPTD 改动、重 build。**不要**试图绕过——拒绝意味着用户改动会丢。
+     另一种拒绝是 `no sync point covers it`（该文件无记录能担保）——同样先 convert
+     建立 baseline，或删掉/改名后再 build。
    - 例外：用户明确要求"别动我的原稿" → `--output` 到别处（如 `<stem>-edited.pptx`）；
-     此时产物不是同步点，不记 hash（下次 convert 会重转，对隔离副本来说正确）；
+     产物同样会被记账（下次覆盖它一样受守卫保护），原文件的记录不受影响。
      小迭代可在同一衍生品上覆盖。
    - 首次覆盖前若 convert 报过 skip（table/chart）：覆盖会把丢这些写进用户文件 →
      先告诉用户"这会丢失 X，自行决定是否备份"。
@@ -107,7 +110,7 @@ B 只有一条循环（SKILL.md §2.2）：**动 PPTD 之前先验 hash（红线
 ### B 模式保真度自检（可选）
 ```bash
 "$SF" build <work_dir>/deck.pptd --output out.pptx
-"$SF" convert out.pptx /tmp/back             # 把产物再转回来（fresh 目录无 .src.hash，自然全量转）
+"$SF" convert out.pptx /tmp/back             # 把产物再转回来（fresh 目录无 .sync.hash，自然全量转）
 "$SF" dump /tmp/back/deck.pptd               # 对比元素数有无掉失
 ```
 
