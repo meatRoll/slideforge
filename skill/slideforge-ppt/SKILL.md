@@ -35,7 +35,7 @@ metadata:
 
 ```bash
 SF=<技能目录>/bin/slideforge     # <技能目录> = 本 SKILL.md 的 dirname（见系统提示 <location>）
-"$SF" --version                   # 确认可用（应输出 slideforge 1.0.0）
+"$SF" --version                   # 确认可用（应输出 slideforge 1.0.1）
 ```
 
 > 派发器找不到合适二进制会退出码 127 并打印修复提示：把对应平台二进制命名为 `slideforge-<triple>` 放进 `bin/`，或把 `slideforge` 装到 PATH（派发器会兜到）。命令示例统一写 `"$SF"`。
@@ -128,10 +128,12 @@ hash 同步已内建在 CLI（§2.3），B 不再区分“AI 独改 / 用户也�
 #    拒绝（退出码 2，文件原样不动）：
 #      - "changed after its last recorded sync point"：文件被外部改过；
 #      - "no sync point covers it"：无记录能担保它（从未被本项目写入/旁车缺失）。
-#    拒绝时按提示走：先 convert 吸收外部改动再重 build；确要弃用该文件则删掉/改名后再 build。
+#    拒绝时按提示走：先 convert 吸收外部改动再重 build。
+#    被拒后不要靠手改/删源文件绕过——那会绕过唯一的安全网；按提示先 convert。
+#    用户没提"重置"就不必考虑重置路径，正常循环用不到它。
 #    build 成功后自动把自己写的文件记账（写入即记账，无 auto-sync 特例）：
 #     "  sync point recorded: <file> = <sha256>"
-#    convert 无重转旗标；要重置就删掉 work_dir（连带旁车文件）重新 convert。
+#    convert 无重转旗标；hash 命中即自动 skip（正常迭代用不到其他操作）。
 ```
 
 - **读到 `unchanged → skipped convert` 就直接改 PPTD**：说明 pptd 已与该 pptx 完全同步，

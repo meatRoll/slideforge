@@ -93,9 +93,10 @@ B 只有一条循环（SKILL.md §2.2）：**动 PPTD 之前先验 hash（红线
      "unchanged"；无需任何旗标。
    - **若被拒绝**（`refusing to build: ... changed after its last recorded sync point`）：
      说明文件在同步点后被外部改过而 pptd 未吸收。按提示先 convert 吸收，
-     再重做 PPTD 改动、重 build。**不要**试图绕过——拒绝意味着用户改动会丢。
-     另一种拒绝是 `no sync point covers it`（该文件无记录能担保）——同样先 convert
-     建立 baseline，或删掉/改名后再 build。
+     再重做 PPTD 改动、重 build。**不要试图绕过——拒绝意味着用户改动会丢。
+     绕过唯一的安全网去强行覆盖，是这份技能里最严重的错误。**
+     另一种拒绝是 `no sync point covers it`（该文件无记录能担保）——
+     按提示先 convert 把源文件变成可编辑 baseline，再重做改动、重 build。
    - 例外：用户明确要求"别动我的原稿" → `--output` 到别处（如 `<stem>-edited.pptx`）；
      产物同样会被记账（下次覆盖它一样受守卫保护），原文件的记录不受影响。
      小迭代可在同一衍生品上覆盖。

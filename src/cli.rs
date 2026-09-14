@@ -54,8 +54,7 @@ pub enum Command {
     /// The source hash is compared against the `.sync.hash` records in the
     /// output directory: when it matches the last sync point the conversion
     /// is skipped ("unchanged → skipped convert", exit code 0) and the
-    /// existing PPTD is left untouched. To start over, delete the output
-    /// directory (which removes the sidecar) and convert again.
+    /// existing PPTD is left untouched.
     Convert {
         /// Input `.pptx` package.
         file: PathBuf,
@@ -85,9 +84,7 @@ fn run_convert(input: &Path, out_dir: &Path) -> i32 {
                     out_dir.join("deck.pptd").display(),
                     input.display()
                 );
-                println!(
-                    "  hint: the existing PPTD reflects this exact .pptx; edit it directly. To start over, delete the output directory and convert again."
-                );
+                println!("  hint: the existing PPTD reflects this exact .pptx; edit it directly.");
                 if report.migrated_sidecars {
                     println!("  note: legacy .src.hash/.build.hash records migrated to .sync.hash");
                 }
@@ -252,10 +249,6 @@ fn run_build(entry: &Path, output: Option<&Path>) -> i32 {
                     output_path.display(),
                     project.root_dir.display()
                 );
-                eprintln!(
-                    "  or delete {} first if discarding them is intended, then build again.",
-                    output_path.display()
-                );
                 return 2;
             }
             Uncovered => {
@@ -271,7 +264,7 @@ fn run_build(entry: &Path, output: Option<&Path>) -> i32 {
                     output_path.display(),
                     project.root_dir.display()
                 );
-                eprintln!("  or delete/rename it, or choose a different --output path.");
+                eprintln!("  or pass a different --output path.");
                 return 2;
             }
         }

@@ -115,8 +115,7 @@ type SlotColors = BTreeMap<String, String>;
 /// The source hash is checked against the `.sync.hash` records in `out_dir`
 /// first: if it matches the last sync point, this is a no-op (returns a
 /// report with [`ConvertReport::skipped_unchanged`] set) and the existing
-/// PPTD project is left untouched. To re-convert from scratch, delete the
-/// output directory (which removes the sidecar) and convert again.
+/// PPTD project is left untouched.
 pub fn convert_pptx_to_pptd(input: &Path, out_dir: &Path) -> Result<ConvertReport> {
     // Sync-point check: identical source hash (records are keyed by file
     // path) → the PPTD project in `out_dir` already reflects this exact
